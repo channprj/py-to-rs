@@ -1,160 +1,488 @@
 # Chapter 1. 왜 Python 개발자가 Rust를 배워야 하는가?
 
-10년 이상 Python으로 밥을 먹고살아온 백엔드 개발자, 데이터 엔지니어, 인프라 개발자라면 누구나 한 번쯤 "성능의 벽"에 부딪혀 본 경험이 있을 것입니다. API 서버의 응답 속도 개선을 위해 `asyncio`나 `FastAPI`를 도입해 보고, CPU 집약적인 작업을 처리하기 위해 `multiprocessing`을 띄워 보며, 메모리 릭(Memory Leak)을 잡기 위해 `gc` 모듈과 `objgraph`를 파헤쳐 보았을 것입니다.
+10년 이상 Python으로 밥을 먹고살아온 백엔드 개발자, 데이터 엔지니어, 인프라 개발자라면 누구나 한 번쯤 "성능의 벽"에 부딪혀 본 경험이 있을 것입니다. API 서버의 p99 레이턴시를 잡으려고 `asyncio`와 `FastAPI`를 도입해 보고, CPU 집약적인 배치를 돌리기 위해 `multiprocessing.Pool`을 띄워 보며, 새벽에 슬랙 알림으로 깨워진 OOM(Out of Memory)을 추적하느라 `gc` 모듈과 `objgraph`, `tracemalloc`을 파헤쳐 보았을 것입니다.
 
-Python은 '개발자의 생산성(Developer Velocity)'을 최우선으로 설계된 언어입니다. 인간의 뇌가 코드를 짜는 속도는 놀랍도록 단축시켜 주지만, 작성된 코드가 실리콘(CPU) 위에서 돌아갈 때는 상당한 오버헤드를 동반합니다. 
+Python은 '개발자의 생산성(Developer Velocity)'을 최우선으로 설계된 언어입니다. 인간의 뇌가 코드를 짜는 속도는 놀랍도록 단축시켜 주지만, 작성된 코드가 실리콘(CPU) 위에서 돌아갈 때는 상당한 오버헤드를 동반합니다. 그리고 그 오버헤드는 "어딘가에서 누군가가" 결국 비용을 치르게 됩니다. 보통은 여러분의 AWS 청구서, 여러분의 온콜(on-call) 일정, 그리고 여러분이 더 큰 인스턴스로 스케일업하며 미루고 미뤄둔 기술 부채의 형태로 말입니다.
 
-이 챕터에서는 10년 차 Python 개발자의 시각에서 Python의 근본적인 한계(GIL, GC Pause, Duck Typing)를 내부 구조 관점에서 되짚어보고, 왜 수많은 언어 중 하필 **Rust**가 그 완벽한 해독제로 떠오르고 있는지 비교해 봅니다.
+흥미로운 점은, 지난 몇 년간 우리가 매일 쓰는 Python 도구들이 조용히 Rust로 다시 쓰이고 있다는 사실입니다. 여러분이 `ruff`로 린팅을 하고, `uv`로 패키지를 설치하며, `pydantic` v2로 데이터를 검증하고, `polars`로 데이터프레임을 다룬다면 — 여러분은 이미 매일 Rust가 만든 바이너리를 실행하고 있습니다. 단지 그 사실을 몰랐을 뿐입니다. 이것은 우연이 아닙니다. Python 생태계의 가장 성능에 민감한 코어들이 약속이라도 한 듯 Rust로 수렴하고 있는 데에는 명확한 구조적 이유가 있습니다.
+
+이 챕터에서는 10년 차 Python 개발자의 시각에서 Python의 근본적인 한계(GIL, GC Pause, Duck Typing)를 **메모리 바이트와 디스패치 메커니즘** 수준에서 해부하고, 왜 수많은 시스템 언어 중 하필 **Rust(러스트)**가 그 가장 설득력 있는 해독제로 떠올랐는지 근거를 들어 비교합니다. 마지막으로 — 그리고 이것이 중요한데 — **언제 Rust를 쓰지 말아야 하는가**도 솔직하게 다룹니다. 모든 것을 Rust로 다시 쓰는 것은 거의 항상 나쁜 결정이기 때문입니다.
 
 ---
 
-## 1.1 Python의 구조적 한계와 런타임 오버헤드
+## 1.1 The Python Way — 런타임이 우리 대신 치르는 비용
 
-### 1.1.1 모든 것은 `PyObject`이다 (메모리 오버헤드)
-Python에서 단순한 정수 `1`을 선언할 때 메모리에서는 어떤 일이 일어날까요? C나 Rust에서는 4바이트(또는 8바이트)의 연속된 메모리 공간만 있으면 충분합니다. 하지만 CPython 구현체에서 모든 데이터는 `PyObject`라는 C 구조체의 포인터로 관리됩니다.
+Python으로 10년을 일했다면 다음 코드가 너무 익숙해서 아무 생각 없이 칠 수 있을 것입니다.
+
+```python
+from __future__ import annotations
+
+def sum_of_squares(numbers: list[int]) -> int:
+    total = 0
+    for n in numbers:
+        total += n * n
+    return total
+
+result = sum_of_squares([1, 2, 3, 4, 5])
+```
+
+이 다섯 줄짜리 함수는 명쾌하고, 읽기 쉽고, 5분 안에 작성됩니다. 이것이 Python의 위대함입니다. 하지만 CPython 인터프리터가 이 루프의 단 한 번의 반복(`total += n * n`)을 실행하기 위해 무엇을 하는지 들여다보면, 생산성의 대가가 어디에 숨어 있는지 보입니다. 인터프리터는 매 반복마다 대략 다음을 수행합니다.
+
+1. `n`이라는 이름을 프레임의 지역 변수 배열에서 로드한다(`LOAD_FAST`).
+2. `n`이 가리키는 `PyObject`의 타입 포인터(`ob_type`)를 따라가 `nb_multiply` 슬롯이 채워져 있는지 확인한다.
+3. `n * n`을 계산하기 위해 새 `PyObject`(정수 객체)를 힙(Heap)에 할당한다. 결과가 작은 정수 캐시(`-5 ~ 256`) 범위를 벗어나면 `malloc`이 호출된다.
+4. `total`의 타입을 다시 확인하고, `__iadd__` / `nb_inplace_add` 슬롯을 조회한다.
+5. 덧셈 결과로 또 다른 `PyObject`를 할당하고, 이전 `total` 객체의 참조 횟수(refcount)를 감소시킨다. 0이 되면 즉시 메모리를 해제한다.
+6. 바이트코드 디스패치 루프의 맨 위로 돌아가 다음 명령어를 페치(fetch)한다.
+
+CPU가 정말로 하고 싶은 일 — `imul` 명령어 하나, `add` 명령어 하나 — 은 위 6단계 중 0.5단계에 불과합니다. 나머지 99%는 "이 객체가 무엇인지, 무엇을 할 수 있는지"를 런타임에 매번 다시 알아내는 부대 비용입니다. 우리는 이 비용을 세 가지 구조적 원인으로 나눌 수 있습니다.
+
+### 1.1.1 모든 것은 `PyObject`이다 — 메모리 오버헤드의 해부
+
+Python에서 단순한 정수 `1`을 선언할 때 메모리에서는 어떤 일이 일어날까요? C나 Rust에서는 4바이트(또는 8바이트)의 연속된 메모리 공간만 있으면 충분합니다. 하지만 CPython 구현체에서 모든 데이터는 `PyObject`라는 C 구조체로 표현되고, 변수는 그 구조체에 대한 포인터일 뿐입니다.
 
 ```c
 // CPython 소스 코드 내부의 정수형 구조체 (간소화)
 struct _longobject {
-    PyObject_VAR_HEAD // 참조 횟수(Reference Count), 타입 정보 등을 담은 헤더
-    digit ob_digit[1]; // 실제 데이터
+    PyObject_VAR_HEAD   // 참조 횟수(ob_refcnt), 타입 포인터(ob_type), 가변 길이(ob_size)
+    digit ob_digit[1];  // 실제 데이터 (가변 길이 배열)
 };
 ```
 
-* **The Python Way**: 
-  ```python
-  # Python에서는 단순 배열을 만들어도 메모리 오버헤드가 큽니다.
-  # 이 리스트는 실제 정수들이 연속으로 저장된 것이 아니라, 
-  # 각기 다른 Heap 위치에 흩어져 있는 PyObject들에 대한 '포인터' 배열입니다.
-  numbers = [1, 2, 3, 4, 5]
-  ```
-Python의 `List`는 연속된 객체 배열이 아닙니다. 포인터들의 배열입니다. 따라서 리스트를 순회하며 계산을 수행할 때, CPU 캐시 히트율(Cache Hit Rate)이 처참하게 떨어집니다. CPU가 메모리를 읽을 때 주변 데이터도 한꺼번에 가져오는데(Spatial Locality), 포인터가 가리키는 실제 데이터는 메모리 여기저기 파편화되어 있기 때문입니다.
+`PyObject_VAR_HEAD`는 64비트 빌드 기준으로 참조 횟수 8바이트, 타입 포인터 8바이트, 길이 정보 8바이트를 차지합니다. 여기에 실제 숫자 데이터가 더해집니다. 추측이 아니라 직접 측정해 봅시다.
 
-* **The Rust Mental Model**:
-  Rust에서 `Vec<i32>`를 선언하면 Heap 메모리상에 **정확히 4바이트짜리 정수들이 틈 없이 연속적으로(contiguous) 배치**됩니다. 포인터 추적(Dereferencing)이 필요 없으므로 CPU L1/L2 캐시를 극한으로 활용합니다.
+```python
+import sys
+sys.getsizeof(1)        # 28
+sys.getsizeof(2 ** 40)  # 32  (더 큰 수는 더 많은 digit 필요)
+```
 
-  ```rust
-  // Rust Implementation
-  fn main() {
-      // 힙(Heap)에 4바이트(i32) * 5개 = 총 20바이트가 연속적으로 할당됨.
-      // 포인터 배열 오버헤드, 객체 헤더(PyObject_HEAD) 오버헤드 제로.
-      let numbers: Vec<i32> = vec![1, 2, 3, 4, 5];
-      
-      // CPU 캐시를 완벽히 활용하는 초고속 순회
-      let sum: i32 = numbers.iter().sum();
-      println!("Sum: {}", sum);
-  }
-  ```
+정수 `1` 하나가 **28바이트**입니다. C/Rust의 `i64` 한 개(8바이트)에 비해 3.5배입니다. 그리고 이 28바이트짜리 객체들은 힙 여기저기에 흩어져 있습니다.
 
-### 1.1.2 GIL (Global Interpreter Lock)의 저주
-"Python은 멀티스레딩이 안 된다"는 말은 반만 맞고 반은 틀린 말입니다. I/O 바운드 작업(`requests.get()` 등)에서는 멀티스레딩이 유효하지만, CPU 바운드 연산(for 루프로 큰 행렬을 계산하는 등)에서는 GIL 때문에 여러 스레드를 띄워도 한 번에 단 하나의 스레드만 Python 바이트코드를 실행할 수 있습니다.
+> **💡 Under the Hood: 리스트는 정수 배열이 아니라 포인터 배열이다**
+>
+> 우리는 `numbers = [1, 2, 3, 4, 5]`를 보고 "메모리에 1, 2, 3, 4, 5가 연속으로 놓인 배열"을 상상하지만, CPython의 `list`는 그런 것이 아닙니다. `list`는 **`PyObject*` 포인터들의 배열**입니다.
+>
+> ```text
+> 스택/리스트 컨테이너            힙(Heap) — 파편화된 객체들
+> ┌───────────────────┐
+> │ list 헤더          │
+> │ ob_item ───────────┼──► [ ptr0 ][ ptr1 ][ ptr2 ] ...   (포인터 배열, 8바이트 × N)
+> └───────────────────┘        │       │       │
+>                              ▼       ▼       ▼
+>                          [PyLong 1][PyLong 2][PyLong 3]   (각 28바이트, 힙 곳곳에 산재)
+> ```
+>
+> `sys.getsizeof([i for i in range(1000)])`를 측정하면 컨테이너만 약 **8856바이트**가 나옵니다. 이것은 1000개의 8바이트 포인터(+여유 용량)일 뿐, 실제 정수 객체 1000개(각 28바이트 ≈ 28KB)는 별도로 존재합니다. 합치면 1000개의 정수 리스트가 약 **36KB**를 먹습니다. Rust의 `Vec<i64>`라면 정확히 8KB(+24바이트 헤더)입니다.
+>
+> 더 치명적인 것은 **CPU 캐시**입니다. CPU는 메모리를 읽을 때 64바이트짜리 캐시 라인 단위로 주변 데이터를 한꺼번에 끌어옵니다(Spatial Locality, 공간 지역성). 정수들이 연속으로 놓여 있으면 한 번의 메모리 페치로 8개의 `i64`를 가져오지만, 포인터를 따라 힙 곳곳을 점프(pointer chasing)해야 하는 Python 리스트는 매번 캐시 미스(Cache Miss)를 일으킵니다. L1 캐시 히트는 ~1ns, 메인 메모리 접근은 ~100ns. 데이터가 클수록 이 100배 격차가 누적됩니다. NumPy가 빠른 이유가 바로 이것입니다 — NumPy 배열은 Python 객체가 아니라 C 레벨의 연속된 원시 데이터 버퍼니까요.
 
-**왜 GIL을 만들었을까요?** 앞서 말한 `PyObject`의 '참조 횟수(Reference Count)'를 스레드 안전(Thread-safe)하게 관리하기 위해서입니다. 수만 개의 객체마다 일일이 락(Lock)을 걸면 너무 느려지니, 아예 "인터프리터 전체에 커다란 자물쇠 하나"를 걸어버린 것입니다.
+### 1.1.2 GIL (Global Interpreter Lock)의 구조적 원인
 
-* **The Python Way**: CPU 바운드 작업을 병렬화하려면 울며 겨자 먹기로 `multiprocessing`을 써야 합니다.
-  ```python
-  import multiprocessing
+"Python은 멀티스레딩이 안 된다"는 말은 반은 맞고 반은 틀립니다. I/O 바운드 작업(`requests.get()`, DB 쿼리 대기 등)에서는 스레드가 대기하는 동안 GIL을 놓아주므로 멀티스레딩이 유효합니다. 하지만 CPU 바운드 연산(큰 루프, 행렬 계산 등)에서는 GIL 때문에 8코어 머신에서 8개 스레드를 띄워도 **한 순간에 단 하나의 스레드만** Python 바이트코드를 실행할 수 있습니다.
 
-  def heavy_computation(data_chunk):
-      # 복잡한 계산 수행
-      return sum(x * x for x in data_chunk)
+**왜 GIL을 만들었을까요?** 1.1.1에서 본 `ob_refcnt` 때문입니다. Python은 참조 카운팅으로 메모리를 관리하는데, 두 스레드가 동시에 같은 객체의 refcount를 증감시키면(`incref`/`decref`) 값이 꼬여 메모리가 너무 일찍 해제되거나(use-after-free) 영영 해제되지 않습니다(leak). 모든 객체의 refcount마다 원자적 락(atomic lock)을 거는 것은 단일 스레드 성능을 심각하게 떨어뜨립니다. 그래서 Guido는 더 단순한 길을 택했습니다 — **인터프리터 전체에 자물쇠 하나**를 걸어버린 것입니다. 단일 스레드 프로그램(대다수의 Python 코드)에서는 이것이 가장 빠른 선택이었습니다.
 
-  if __name__ == '__main__':
-      data = [list(range(1000000)) for _ in range(4)]
-      # 스레드 대신 아예 별도의 Python 프로세스(OS 레벨)를 4개 복제해서 띄움 (메모리 4배 낭비)
-      with multiprocessing.Pool(4) as p:
-          results = p.map(heavy_computation, data)
-  ```
-  별도의 프로세스를 띄우면 객체 직렬화/역직렬화(Pickle) 비용과 막대한 메모리 복제 비용(IPC Overhead)이 발생합니다. 
+그 결과 CPU 병렬화를 하려면 울며 겨자 먹기로 `multiprocessing`을 써야 합니다.
 
-### 1.1.3 Duck Typing과 런타임 검사의 늪
-Python의 강력함은 어디서 올까요? 바로 객체의 타입을 런타임에 결정짓는 Duck Typing입니다.
+```python
+import multiprocessing
+
+def heavy_computation(data_chunk: list[int]) -> int:
+    return sum(x * x for x in data_chunk)
+
+if __name__ == "__main__":
+    data = [list(range(1_000_000)) for _ in range(4)]
+    # 스레드 대신 별도의 Python 프로세스(OS 레벨)를 4개 fork/spawn.
+    with multiprocessing.Pool(4) as p:
+        results = p.map(heavy_computation, data)
+```
+
+별도 프로세스는 진짜 병렬 실행을 얻지만, 대가가 큽니다. 프로세스 간에 데이터를 주고받으려면 객체를 `pickle`로 직렬화해 파이프로 전송하고 다시 역직렬화해야 합니다(IPC Overhead). 큰 DataFrame이나 모델 가중치를 워커에 넘기면 직렬화 비용이 계산 비용을 압도하는 경우가 흔합니다. 또한 워커마다 인터프리터와 임포트된 모듈이 통째로 복제되어 메모리를 N배 먹습니다.
+
+> 🚨 **No Free Lunch (GIL 제거 시도의 역사)**: "그냥 GIL을 없애면 안 되나?" 수많은 시도가 있었습니다. 2007년 무렵 시도된 패치들은 락 경합 때문에 단일 스레드 성능이 절반 가까이 떨어져 폐기됐습니다. 2024년 Python 3.13에서 마침내 실험적인 **free-threaded 빌드(`--disable-gil`, PEP 703)**가 등장했지만, 여전히 단일 스레드 오버헤드와 C 확장 호환성 문제를 안고 있어 기본값이 아닙니다. GIL은 버그가 아니라 refcount 기반 메모리 모델이 강제하는 구조적 트레이드오프입니다. 이것을 깔끔하게 피하려면 애초에 refcount에 의존하지 않는 메모리 모델이 필요합니다 — 그리고 그것이 Rust의 소유권입니다.
+
+### 1.1.3 Duck Typing과 동적 디스패치의 늪
+
+Python의 유연함은 객체의 타입을 런타임에 결정하는 Duck Typing에서 옵니다.
 
 ```python
 def add(a, b):
-    return a + b  # a와 b가 int인지, str인지, list인지 실행해보기 전엔 모름
+    return a + b  # a, b가 int인지, str인지, np.ndarray인지 실행 전엔 모름
 ```
-파이썬 인터프리터는 이 코드를 실행할 때마다 `a`의 타입이 무엇인지, `a` 객체 안에 `__add__` 매직 메서드가 정의되어 있는지 딕셔너리 조회를 통해 검색(Dynamic Dispatch)해야 합니다. 이 런타임 타입 검사와 메서드 룩업 과정이 프로그램 실행 시간의 상당 부분을 갉아먹습니다. 아무리 Type Hint(`a: int, b: int`)를 달아도, 이는 린터(Mypy)용일 뿐 런타임 최적화에는 전혀 기여하지 못합니다.
+
+인터프리터는 이 코드를 만날 때마다 `a`의 타입 객체를 찾아 `__add__`(C 레벨에서는 `nb_add` 슬롯)가 정의되어 있는지 조회해야 합니다. 이것이 **동적 디스패치(Dynamic Dispatch)**입니다.
+
+더 무서운 것은 **속성 조회(Attribute Lookup)**입니다. `obj.method()` 한 줄을 실행하기 위해 Python은 다음 순서로 해시 테이블을 뒤집니다: 인스턴스의 `__dict__` → 클래스의 `__dict__` → MRO(Method Resolution Order)를 따라 부모 클래스들의 `__dict__` → 디스크립터 프로토콜(`__get__`) 확인. 깊은 상속 트리를 가진 객체라면 메서드 하나 부르는 데 여러 번의 해시 룩업이 발생합니다.
+
+아무리 타입 힌트(`a: int, b: int`)를 달아도 이것은 **`mypy`/`pyright` 같은 정적 분석기용 주석일 뿐**, 런타임 인터프리터는 그 힌트를 완전히 무시합니다. 힌트를 달았다고 코드가 단 1나노초도 빨라지지 않습니다. 타입 정보가 런타임까지 살아남아 기계어 최적화에 쓰이지 못한다는 것 — 이것이 동적 언어의 근본적 성능 한계입니다.
+
+### 1.1.4 속성 조회는 해시 테이블 룩업이다
+
+동적 디스패치보다 더 자주, 더 조용히 비용을 무는 것이 **속성 조회(Attribute Lookup)**입니다. 우리가 무심코 쓰는 `point.x` 한 번이 내부적으로 무엇을 하는지 봅시다.
+
+```python
+class Point:
+    def __init__(self, x: float, y: float) -> None:
+        self.x = x
+        self.y = y
+
+p = Point(1.0, 2.0)
+total = p.x + p.y   # 이 한 줄에 두 번의 해시 룩업이 숨어 있다
+```
+
+대부분의 일반 Python 인스턴스는 속성을 `__dict__`라는 **딕셔너리(해시 테이블)**에 저장합니다. `p.x`는 다음을 수행합니다. (1) 인스턴스의 `__dict__`에서 문자열 `"x"`를 해싱해 슬롯을 찾고, (2) 없으면 클래스의 `__dict__`를 뒤지고, (3) 그래도 없으면 MRO를 따라 부모 클래스들을 차례로 뒤지며, (4) 디스크립터(`@property` 등)가 걸려 있으면 `__get__`을 호출합니다. 단순한 필드 접근이 사실은 **문자열 해싱 + 해시 테이블 탐색**인 것입니다.
+
+`__dict__`는 인스턴스마다 별도의 딕셔너리를 만들기 때문에 메모리도 추가로 먹습니다. 그래서 메모리에 민감한 코드는 `__slots__`를 선언해 딕셔너리 대신 고정 슬롯 배열을 쓰도록 강제합니다 — 이것은 사실상 "Python에게 C 구조체처럼 동작해 달라"고 부탁하는 우회로입니다.
+
+> **💡 Under the Hood: Rust의 필드 접근은 포인터 + 오프셋이다**
+>
+> 같은 `Point`를 Rust로 쓰면 필드 접근에 해시 룩업이 일절 없습니다.
+>
+> ```rust
+> struct Point {
+>     x: f64,  // 오프셋 0, 8바이트
+>     y: f64,  // 오프셋 8, 8바이트
+> }
+> // 메모리 레이아웃: [ x (8B) ][ y (8B) ] — 정확히 16바이트, 헤더 없음
+> ```
+>
+> 컴파일러는 컴파일 타임에 "`x`는 구조체 시작점에서 0바이트, `y`는 8바이트 떨어진 곳"이라는 **고정 오프셋(offset)**을 이미 압니다. `p.x` 접근은 기계어로 `[base_ptr + 0]`, `p.y`는 `[base_ptr + 8]`라는 단 하나의 메모리 로드 명령어로 컴파일됩니다. 문자열 `"x"`는 런타임에 존재하지도 않습니다 — 필드 이름은 컴파일이 끝나면 증발하는 컴파일 타임 정보일 뿐입니다.
+>
+> 정리하면, Python의 `point.x`는 *문자열을 해싱해 딕셔너리를 탐색*하고, Rust의 `point.x`는 *상수 오프셋을 더해 메모리를 한 번 읽습니다*. 수백만 개 객체의 필드를 순회하는 데이터 처리에서 이 차이는 그대로 처리량 격차로 나타납니다. 7장에서 `dataclass`/`Pydantic` 모델을 Rust `struct`로 옮길 때 이 레이아웃 차이를 바이트 단위로 다시 해부합니다.
+
+이제 측정해 봅시다. 같은 알고리즘, 같은 머신(이 책의 벤치마크는 Apple Silicon / Python 3.13.6 / Rust 1.96 `--release` 기준)입니다.
+
+```python
+import time
+N = 50_000_000
+start = time.perf_counter()
+total = 0
+for i in range(N):
+    total += i * i
+print(f"{time.perf_counter() - start:.3f}s")   # 약 3.0s
+```
+
+50M번 루프를 도는 데 약 **3.0초**. 같은 일을 Rust로 하면(아래 1.3에서 코드를 봅니다) 약 **0.02~0.03초**입니다. 약 **100배**의 격차입니다. 재귀가 많은 워크로드(`fib(35)`)에서는 Python 0.76초 대 Rust 0.02초로 약 **38배**였습니다. 이것이 우리가 매 반복마다 "이 객체가 무엇인지 다시 알아내는" 비용의 실체입니다.
 
 ---
 
-## 1.2 Rust의 해독제: Zero-cost Abstraction과 Fearless Concurrency
+## 1.2 The Rust Mental Model — 비용을 런타임에서 컴파일 타임으로 옮긴다
 
-Rust는 위의 세 가지 문제를 언어의 설계 철학 단계에서 완벽하게 해결합니다.
+Python의 세 가지 한계 — PyObject 메모리 비대, GIL, 동적 디스패치 — 를 관통하는 하나의 패턴이 보이시나요? **모두 "런타임에 정보를 다시 알아내는" 비용**입니다. 타입을, 메모리 소유권을, 메서드 위치를 실행 중에 매번 재확인합니다.
 
-### 1.2.1 컴파일러에게 책임을 떠넘기다 (Static Typing & Monomorphization)
-Rust는 동적 디스패치의 비용을 **단일형화(Monomorphization)**라는 컴파일 타임 기법으로 없애버립니다. 
+Rust의 핵심 철학은 한 문장으로 요약됩니다: **"가능한 모든 결정을 컴파일 타임으로 끌어올려라."** 타입은 컴파일 시점에 확정되고, 메모리 해제 시점도 컴파일 시점에 결정되며, 어떤 함수가 호출될지도 대부분 컴파일 시점에 박제됩니다. 런타임에는 그 결정들을 따라 최적화된 기계어를 실행할 뿐, 아무것도 다시 묻지 않습니다.
 
-* **The Rust Implementation**:
-  ```rust
-  // 제네릭(Generic)을 사용해 다형성을 구현한 Rust 함수
-  // T는 Add 트레이트를 구현해야 하고(std::ops::Add), Output 타입이 T와 같아야 한다는 제약(Bound)
-  fn add<T>(a: T, b: T) -> T 
-  where 
-      T: std::ops::Add<Output = T> 
-  {
-      a + b
-  }
+이 철학에서 세 가지 약속이 나옵니다.
 
-  fn main() {
-      let int_result = add(5, 10);
-      let float_result = add(3.14, 2.71);
-  }
-  ```
+| 약속 | 의미 | Python의 대응물 |
+|------|------|----------------|
+| **무비용 추상화(Zero-cost Abstraction)** | 제네릭·이터레이터·클로저 같은 고수준 추상이 손으로 짠 저수준 코드만큼 빠름 | 추상화할수록 느려짐(데코레이터·프로퍼티·`__getattr__` 오버헤드) |
+| **두려움 없는 동시성(Fearless Concurrency)** | 데이터 레이스를 컴파일러가 원천 차단, GIL 없이 진짜 병렬 | GIL로 CPU 병렬 봉쇄, `multiprocessing`은 IPC 비용 |
+| **예측 가능한 성능(Predictable Performance)** | GC 없음 → 멈춤(stall) 없음, 메모리는 결정론적으로 해제 | GC Pause, refcount 비용, 메모리 사용량 예측 불가 |
 
-**Under the Hood**: 위 Rust 코드가 컴파일될 때, 컴파일러는 `add`라는 단 하나의 함수를 만들지 않습니다. `add`가 정수(`i32`)로 호출된 곳과 실수(`f64`)로 호출된 곳을 분석하여 **어셈블리 레벨에서 두 개의 서로 다른 함수(`add_i32`, `add_f64`)를 하드코딩해서 복제 생성**합니다. 
-런타임에는 타입을 검사하거나 메서드를 조회하는 시간이 단 1나노초도 들지 않습니다. 그저 컴파일러가 만들어둔 최적화된 기계어를 실행할 뿐입니다. 이것이 바로 C++와 Rust가 자랑하는 **Zero-cost Abstraction(추상화 비용 제로)**입니다.
+이 세 가지를 차례로 해부해 봅시다.
+
+### 1.2.1 무비용 추상화와 단일형화(Monomorphization)
+
+Rust는 동적 디스패치의 비용을 **단일형화(Monomorphization)**라는 컴파일 타임 기법으로 제거합니다. 제네릭 코드를 쓰되, 컴파일러가 실제 사용된 구체 타입마다 전용 함수를 복제 생성합니다.
+
+```rust
+use std::ops::Add;
+
+// 제네릭 함수. T는 Add 트레이트를 구현하고, 덧셈 결과 타입이 다시 T여야 한다는 제약(Bound).
+fn add<T>(a: T, b: T) -> T
+where
+    T: Add<Output = T>,
+{
+    a + b
+}
+
+fn main() {
+    let int_result = add(5_i32, 10);      // T = i32 로 확정
+    let float_result = add(3.14_f64, 2.71); // T = f64 로 확정
+    println!("{int_result} {float_result}"); // 출력: 15 5.85
+}
+```
+
+> **💡 Under the Hood: 제네릭은 런타임에 사라진다**
+>
+> 위 코드가 컴파일될 때, 컴파일러는 `add`라는 단 하나의 함수를 만들지 않습니다. `add`가 `i32`로 호출된 곳과 `f64`로 호출된 곳을 분석하여 **두 개의 서로 다른 구체 함수를 기계어 레벨에서 복제 생성**합니다. 개념적으로 이렇게 됩니다.
+>
+> ```rust
+> // 컴파일러가 내부적으로 생성하는 것 (의사 코드)
+> fn add__i32(a: i32, b: i32) -> i32 { a + b }  // 어셈블리: add eax, ...  (단일 명령어)
+> fn add__f64(a: f64, b: f64) -> f64 { a + b }  // 어셈블리: addsd xmm0, ... (단일 명령어)
+> ```
+>
+> 런타임에는 타입 검사도, 슬롯 조회도, `__add__` 룩업도 없습니다. `i32` 덧셈은 단 하나의 CPU 명령어(`add`)로 컴파일됩니다. 이것이 **무비용 추상화**입니다 — 제네릭이라는 고수준 추상을 썼지만, 손으로 두 함수를 따로 짠 것과 토씨 하나 다르지 않은 기계어가 나옵니다. (트레이드오프도 있습니다: 타입마다 코드가 복제되므로 바이너리 크기가 커질 수 있습니다. 이것을 코드 비대화(code bloat)라 부르며, 9장·10장에서 동적 디스패치(`dyn Trait`)와의 트레이드오프를 다룹니다.)
+>
+> 반면 CPython의 `a + b`는 항상 `PyNumber_Add()`라는 범용 C 함수를 거치고, 그 안에서 매번 타입 슬롯을 조회합니다. 타입이 `i32`로 고정되어 있다는 사실을 알아도 그것을 활용할 방법이 런타임에는 없습니다.
 
 ### 1.2.2 GIL 파괴자: 소유권(Ownership)과 Fearless Concurrency
-Rust에는 GIL이 없습니다. 그렇다고 `PyObject`처럼 객체마다 레퍼런스 카운트를 세며 뮤텍스(Mutex)를 남발하지도 않습니다. 
 
-**Garbage Collector 없이 어떻게 메모리를 해제하는가?**
-Rust는 **소유권(Ownership)**이라는 독특한 규칙을 도입했습니다. "모든 메모리 할당은 단 하나의 '주인(Owner)' 변수만 갖는다. 주인이 스코프(Scope)를 벗어나면 메모리는 즉각 해제된다."
+Rust에는 GIL이 없습니다. 그렇다고 `PyObject`처럼 객체마다 refcount를 세지도 않습니다. 대신 **소유권(Ownership)**이라는 규칙으로 메모리를 컴파일 타임에 관리합니다(4장에서 깊이 다룹니다).
 
-이 단순한 규칙 덕분에 런타임에 뒤에서 쓰레기를 줍고 다니는 GC 스레드(GC Pause를 유발하는 주범)가 필요 없어집니다.
+> 모든 값은 단 하나의 소유자(Owner) 변수를 가진다. 소유자가 스코프(Scope)를 벗어나면 값은 그 즉시, 결정론적으로 해제된다(`drop`).
 
-* **예제: Python C-extension vs Rust 멀티스레딩 비교**
-  Python에서 GIL을 피하기 위해 C++로 확장(Extension)을 작성할 때 가장 무서운 것은 바로 Data Race(여러 스레드가 동시에 같은 메모리를 수정하려다 데이터가 꼬이거나 C-Crash가 나는 현상)입니다. 
+이 규칙 덕분에 런타임에 뒤에서 쓰레기를 줍는 GC 스레드가 필요 없고(따라서 GC Pause도 없고), refcount 원자적 연산도 대부분 필요 없으며, GIL도 필요 없습니다. 그리고 컴파일러는 소유권 정보를 이용해 **데이터 레이스를 일으키는 코드를 아예 컴파일 거부**합니다.
 
-  하지만 Rust에서는 여러 스레드가 동시에 안전하지 않게 메모리에 접근하는 코드 자체를 **컴파일러가 거부**해버립니다.
+먼저, 의도적으로 틀린 코드를 보겠습니다. 4개 스레드가 하나의 카운터를 동시에 건드리려는, Python/C 확장에서라면 조용히 잘못된 결과를 내거나 크래시를 낼 코드입니다.
 
-  ```rust
-  use std::thread;
-  use std::sync::{Arc, Mutex};
+```rust
+use std::thread;
 
-  fn main() {
-      // Arc: Atomic Reference Counted (스레드 간 안전한 참조 카운트)
-      // Mutex: 상호 배제 잠금 (데이터 접근을 1개 스레드로 제한)
-      let counter = Arc::new(Mutex::new(0));
-      let mut handles = vec![];
+fn main() {
+    let mut counter = 0;
+    let mut handles = vec![];
 
-      for _ in 0..4 {
-          let counter_clone = Arc::clone(&counter);
-          // Python의 multiprocessing과 달리, 진정한 OS 스레드 4개가 생성됨!
-          let handle = thread::spawn(move || {
-              // Lock을 걸지 않으면 데이터에 물리적으로 접근할 수 없도록 강제됨
-              let mut num = counter_clone.lock().unwrap();
-              *num += 1; // 여기서만 값 수정 가능
-          }); // Lock은 스코프를 벗어나면 RAII 패턴에 의해 자동 해제됨.
-          handles.push(handle);
-      }
+    for _ in 0..4 {
+        // 🚨 컴파일 에러! 여러 스레드가 같은 counter를 가변 참조하려 함
+        let h = thread::spawn(|| {
+            counter += 1;
+        });
+        handles.push(h);
+    }
 
-      for h in handles {
-          h.join().unwrap(); // 모든 스레드 종료 대기
-      }
+    for h in handles {
+        h.join().unwrap();
+    }
+    println!("{counter}");
+}
+```
 
-      println!("Result: {}", *counter.lock().unwrap());
-  }
-  ```
+`rustc`는 이 코드를 거부하며 다음을 출력합니다.
 
-이것이 Rust의 **Fearless Concurrency(두려움 없는 동시성)**입니다. 컴파일이 성공했다면, 데드락(Deadlock, 무한 대기)은 발생할지언정, 메모리가 꼬여서 프로그램이 갑자기 코어 덤프(Core Dump)를 뱉으며 죽는 `Segfault`나 `Data Race`는 절대 발생하지 않음을 언어가 수학적으로 증명해 준 것입니다.
+```text
+error[E0373]: closure may outlive the current function, but it borrows
+              `counter`, which is owned by the current function
+ --> src/main.rs:7:31
+  |
+7 |         let h = thread::spawn(|| {
+  |                               ^^ may outlive borrowed value `counter`
+8 |             counter += 1;
+  |             ------- `counter` is borrowed here
+  |
+help: to force the closure to take ownership of `counter`, use the `move` keyword
+
+error[E0499]: cannot borrow `counter` as mutable more than once at a time
+```
+
+해독하면 이렇습니다. "이 클로저(스레드 작업)는 함수가 끝난 뒤에도 살아 있을 수 있는데, 함수 소유의 `counter`를 빌리고 있다. 게다가 `counter`를 동시에 여러 번 가변 대여(mutable borrow)하려 한다 — 그건 데이터 레이스다." 컴파일러가 **버그를 배포 전에 잡아낸 것**입니다. Python이었다면 이 코드는 멀쩡히 컴파일되고, 운영 환경에서 가끔 카운트가 틀리는 하이젠버그(Heisenbug)로 우리를 괴롭혔을 것입니다.
+
+이제 컴파일러가 원하는 대로, 안전하게 공유하는 올바른 코드입니다.
+
+```rust
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+fn main() {
+    // Arc: Atomic Reference Counted — 스레드 간 안전한 공유 소유권
+    // Mutex: 상호 배제 잠금 — 데이터 접근을 한 번에 1개 스레드로 제한
+    let counter = Arc::new(Mutex::new(0_u64));
+    let mut handles = vec![];
+
+    for _ in 0..4 {
+        let counter_clone = Arc::clone(&counter); // 참조 카운트 +1 (값 복제 아님)
+        // Python의 multiprocessing과 달리, 진짜 OS 스레드 4개가 생성됨
+        let handle = thread::spawn(move || {
+            for _ in 0..1_000_000 {
+                // 락을 얻어야만 데이터에 물리적으로 접근 가능 — 컴파일러가 강제
+                let mut num = counter_clone.lock().unwrap();
+                *num += 1;
+            } // 락은 스코프를 벗어나면 RAII로 자동 해제 (unlock을 깜빡할 수 없음)
+        });
+        handles.push(handle);
+    }
+
+    for h in handles {
+        h.join().unwrap(); // 모든 스레드 종료 대기
+    }
+
+    println!("Result: {}", *counter.lock().unwrap()); // 항상 4000000
+}
+```
+
+이 코드는 진짜 4개 OS 스레드로 4코어를 동시에 돌리며, 출력은 **항상** `4000000`입니다. 이것이 **Fearless Concurrency(두려움 없는 동시성)**입니다. 컴파일이 성공했다면, 데드락(서로 락을 기다리는 무한 대기)은 논리적으로 만들 수 있을지언정, 메모리가 꼬여 `Segfault`나 `Data Race`로 죽는 일은 **언어가 타입 시스템으로 증명해서 차단**합니다. 그 증명의 핵심에 `Send`/`Sync`라는 두 트레이트가 있는데, 17장에서 깊이 다룹니다.
+
+> **💡 Under the Hood: `Arc`와 Python refcount의 차이**
+>
+> `Arc<T>`도 결국 참조 카운팅입니다. CPython의 `ob_refcnt`와 뭐가 다를까요?
+>
+> 1. **선택적이다.** Python은 *모든* 객체가 항상 refcount를 답니다(28바이트 중 8바이트). Rust는 진짜 공유가 필요할 때만 `Arc`로 감쌉니다. 99%의 값은 단일 소유라 카운트 자체가 없습니다(오버헤드 0).
+> 2. **카운트 증감 위치가 컴파일 타임에 결정된다.** `Arc::clone`을 호출한 곳에서만 원자적 증가가 일어납니다. Python처럼 모든 대입·함수 인자 전달·리스트 추가마다 `incref`가 끼어들지 않습니다.
+> 3. **`Arc`는 "공유 가능"만 보장하고, "가변 공유 안전성"은 `Mutex`/`RwLock`이 별도로 강제한다.** 컴파일러는 `Arc<u64>`를 여러 스레드에서 *수정*하려 하면 거부합니다. `Arc<Mutex<u64>>`처럼 락으로 감싸야만 통과시킵니다. 즉 "공유"와 "가변 접근"을 타입으로 분리해, unlock을 깜빡하는 류의 실수를 원천 봉쇄합니다.
+
+### 1.2.3 예측 가능한 성능: GC Pause가 없다는 것의 의미
+
+Python의 메모리 관리는 2단계입니다. (1) 평상시에는 refcount가 0이 되는 즉시 객체를 해제하고, (2) 순환 참조(`a.b = b; b.a = a`)는 refcount만으로 못 잡으므로 주기적으로 **세대별 가비지 컬렉터(generational GC)**가 돌며 도달 불가능한 순환 객체를 수거합니다.
+
+이 GC는 평소엔 보이지 않지만, 객체가 수백만 개 쌓인 큰 프로세스에서 GC가 도는 순간 **모든 스레드가 멈출 수 있습니다(stop-the-world에 준하는 pause)**. 레이턴시에 민감한 서비스에서 p99 스파이크의 범인이 GC인 경우는 흔하며, 그래서 일부 고성능 Python 서비스는 아예 `gc.disable()`을 켜고 메모리를 일부러 흘려보내며 주기적으로 프로세스를 재시작하기도 합니다. 이것은 해결이 아니라 회피입니다.
+
+이 고통은 Python만의 것이 아닙니다. Discord는 자사 "Read States" 서비스를 Go로 작성했다가, Go의 GC가 약 2분마다 강제로 돌며 레이턴시 스파이크를 만드는 문제(GC를 튜닝해도 피할 수 없는 구조적 한계)에 부딪혀 **Rust로 다시 작성**했고, 그 결과 꼬리 레이턴시(tail latency)가 평탄해졌다고 2020년 공개적으로 밝혔습니다. GC가 있는 어떤 언어든(Java, Go, Python, JS) 이 트레이드오프에서 자유롭지 않습니다.
+
+Rust의 답은 단순합니다 — **런타임 GC가 없습니다.** 메모리 해제는 컴파일 타임에 삽입된 `drop` 호출로 결정론적으로 일어납니다(RAII 패턴, C++의 소멸자와 같은 계열). 어떤 함수가 끝나는 순간 그 스코프의 값들이 해제되는지 소스만 보고 알 수 있습니다. 정전기처럼 예측 불가능하게 끼어드는 일시 정지가 없습니다. 이것이 Firecracker(AWS Lambda·Fargate를 떠받치는 마이크로VM)나 Cloudflare의 엣지 프록시처럼 수십만 인스턴스에서 일관된 레이턴시를 요구하는 인프라가 Rust를 택한 이유입니다.
 
 ---
 
-## 1.3 요약: Python 개발자에게 Rust란?
+## 1.3 벤치마크와 메모리: 숫자로 보는 격차
 
-1. **런타임 에러에서 컴파일 타임 에러로**: 배포 후 새벽 3시에 발생하던 `AttributeError`나 `TypeError`를, 내 PC에서 코드를 저장하는 순간(Compile Time) 발생하도록 앞당깁니다.
-2. **"제발 메모리 좀 덜 먹어라"의 해방**: 서버를 띄워두고 점진적으로 램이 치솟는 OOM(Out of Memory) 현상과 싸우느라 시간을 보냈다면, 소유권 기반의 Rust는 마음의 평화를 줄 것입니다.
-3. **완벽한 접착제(Glue) 언어**: Python 코드를 전부 Rust로 바꿀 필요는 없습니다. Python의 유연함이 필요한 비즈니스 로직(Django, FastAPI 등)은 그대로 두고, 병목이 발생하는 수치 연산, 텍스트 파싱, 암호화 등의 코어 모듈만 Rust로 포팅(PyO3)하여 Python 모듈처럼 `import`해서 쓰는 하이브리드 전략이야말로 현대 백엔드 아키텍처의 트렌드입니다. (실례: `pydantic-core`, `polars`, `cryptography` 등)
+마케팅 슬로건 대신 측정값으로 이야기하겠습니다. 모든 수치는 동일 머신(Apple Silicon), Python 3.13.6, Rust 1.96 `--release` 빌드, `std::hint::black_box`로 컴파일러의 상수 폴딩(constant folding)을 막아 정직하게 측정한 값입니다.
 
-다음 챕터에서는 의존성 관리 지옥(`pip`, `requirements.txt`, `poetry`, `virtualenv`)에서 해방시켜 줄 완벽한 툴링, **Cargo**에 대해 파헤쳐 봅니다.
+### 1.3.1 CPU 바운드 루프
+
+1.1.3의 Python `sum_of_squares`(50M 반복, 약 3.0초)와 동일한 Rust 코드입니다.
+
+```rust
+use std::time::Instant;
+use std::hint::black_box; // 컴파일러가 루프를 통째로 최적화해 없애지 못하게 막는 가드
+
+fn main() {
+    let n: u64 = 50_000_000;
+    let start = Instant::now();
+
+    let mut total: u128 = 0;
+    for i in 0..n as u128 {
+        // black_box가 없으면 컴파일러가 결과를 컴파일 타임에 계산해버려 0초가 나옴
+        total += black_box(i) * black_box(i);
+    }
+
+    println!("{:.4}s (total={})", start.elapsed().as_secs_f64(), total);
+    // 출력 예: 0.0288s
+}
+```
+
+직접 재현해 보고 싶다면, 위 코드를 `bench.rs`로 저장하고 다음과 같이 빌드·실행하면 됩니다(2장에서 `cargo`로 더 우아하게 하는 법을 봅니다).
+
+```bash
+$ rustc -O bench.rs -o bench   # -O = 최적화 켬 (= cargo의 --release)
+$ ./bench
+0.0288s (total=41666665416666675000000)
+```
+
+| 워크로드 (50M / fib(35)) | Python 3.13 | Rust 1.96 `--release` | 배수 |
+|--------------------------|-------------|----------------------|------|
+| 제곱합 루프 (50M회) | ~3.0s | ~0.029s | 약 100배 |
+| 재귀 `fib(35)` | ~0.76s | ~0.020s | 약 38배 |
+
+> 🚨 **함정 주의 (벤치마크 정직성)**: 위 수치는 **순수 CPU 바운드, 인터프리터 루프**라는 Python에 가장 불리한 시나리오입니다. 현실은 다릅니다. (1) NumPy/Polars처럼 이미 C/Rust로 짜인 라이브러리를 쓰는 워크로드는 격차가 훨씬 작습니다 — 무거운 일은 이미 네이티브 코드가 하니까요. (2) I/O 바운드 서비스(DB·네트워크 대기가 대부분)는 언어 속도가 병목이 아니라서 2~5배 차이에 그치기도 합니다. (3) `black_box`를 빼면 위 Rust 루프는 0.000초가 나오는데, 그건 컴파일러가 "결과를 미리 계산해도 된다"고 판단해 루프 자체를 지워버리기 때문입니다 — 이런 식의 "1000배 빨라요" 벤치마크는 거짓입니다. **항상 측정 맥락을 의심하십시오.** "보통 2~50배, CPU 바운드 핫루프에서 100배+"가 정직한 범위입니다.
+
+### 1.3.2 메모리 풋프린트
+
+1.1.1에서 본 Python의 메모리 비대를 Rust 쪽 숫자와 나란히 놓겠습니다.
+
+| 데이터 | Python (CPython) | Rust |
+|--------|------------------|------|
+| 정수 1개 | `int` 객체 = **28바이트** | `i64` = **8바이트** (스택, 헤더 0) |
+| 정수 1000개 | `list` 컨테이너 8856B + 객체 28KB ≈ **36KB** | `Vec<i64>` = 핸들 24B + 데이터 **8KB** |
+| 문자열 핸들 | `str` 헤더 49B+ (49 + len) | `String` = **24바이트** 핸들 (ptr·len·cap) |
+| 문자열 슬라이스 | (해당 개념 없음) | `&str` = **16바이트** fat pointer (ptr·len) |
+
+`std::mem::size_of`로 직접 확인할 수 있습니다.
+
+```rust
+fn main() {
+    println!("{}", std::mem::size_of::<Vec<i64>>());     // 24  (ptr + len + cap)
+    println!("{}", std::mem::size_of::<String>());        // 24
+    println!("{}", std::mem::size_of::<&str>());          // 16  (fat pointer)
+    println!("{}", std::mem::size_of::<Option<&i64>>());  // 8   (니치 최적화!)
+}
+```
+
+> **💡 Under the Hood: `Option<&T>`가 8바이트인 마법 (니치 최적화)**
+>
+> `Option<&i64>`는 "참조가 있거나(`Some`) 없거나(`None`)"를 표현합니다. 순진하게 구현하면 "있다/없다" 태그 1바이트 + 정렬 패딩 7바이트 + 포인터 8바이트 = 16바이트가 들 것 같습니다. 하지만 측정값은 **8바이트**입니다.
+>
+> 비결은 **니치 최적화(Niche Optimization)**입니다. 컴파일러는 "참조는 절대 null(주소 0)일 수 없다"는 사실을 압니다(Rust 참조는 항상 유효). 그래서 사용되지 않는 값인 **주소 0을 `None`의 표식으로 재활용**합니다. 태그 비트가 따로 필요 없습니다. 결과적으로 Rust의 `Option<&T>`는 C의 "null이면 없는 것"과 정확히 같은 메모리 표현을 가지면서도, 타입 시스템이 `None` 체크를 강제합니다(12장). NullPointerException의 위험 없이 null 포인터의 효율을 얻는 것입니다. Python의 `Optional[X]`는 이런 표현 최적화가 불가능합니다 — 어차피 모든 것이 포인터니까요.
+
+이 표가 의미하는 바는 분명합니다. 같은 데이터를 다룰 때 Rust 프로세스는 통상 Python의 1/3 ~ 1/5 메모리를 씁니다. 컨테이너 밀집도가 높은 데이터 워크로드(수백만 행)에서는 이 차이가 "32GB 인스턴스가 필요하냐, 8GB로 되냐"를 가릅니다.
+
+---
+
+## 1.4 실전 사례: 누가, 왜 Rust를 택했는가
+
+이 책의 주장을 신뢰하지 않아도 좋습니다. 대신 여러분이 이미 매일 쓰는 도구들의 선택을 보십시오.
+
+**Astral의 `ruff`와 `uv`.** `ruff`는 Flake8·isort·pyupgrade 등 수십 개 Python 린터를 하나로 대체하는 Rust 린터로, 기존 도구 대비 **10~100배** 빠릅니다(수만 줄 코드베이스 린팅이 초 단위에서 밀리초 단위로). `uv`는 `pip`/`pip-tools`/`poetry`/`virtualenv`를 대체하는 Rust 패키지 설치기로, 의존성 해결과 설치에서 `pip` 대비 **10~100배** 빠릅니다. 흥미롭게도 둘 다 **Python 개발자를 위한 도구**인데 Rust로 짜였습니다 — Python으로는 그 속도가 안 나오니까요.
+
+**`pydantic-core`.** FastAPI의 심장인 Pydantic은 v2에서 검증 엔진(`pydantic-core`)을 통째로 Rust로 다시 썼습니다(PyO3 바인딩). 그 결과 데이터 검증이 v1 대비 **5~50배** 빨라졌습니다. v1은 순수 Python이었습니다.
+
+**`polars`.** Pandas의 대안인 DataFrame 라이브러리로, Rust로 작성되어 멀티스레드(GIL 없음)·SIMD·지연 평가(lazy evaluation)를 활용합니다. 큰 그룹바이/조인에서 Pandas 대비 수 배~수십 배 빠르며, 메모리도 적게 씁니다.
+
+**`cryptography`.** Python의 표준 암호화 라이브러리는 보안에 민감한 부분(ASN.1 파싱 등)을 점진적으로 Rust로 이전했습니다 — 메모리 안전성이 곧 보안이기 때문입니다. C로 짠 파서의 버퍼 오버플로는 곧 CVE이지만, Rust 파서는 그 클래스의 취약점을 컴파일 타임에 차단합니다.
+
+**인프라 레벨.** Dropbox는 동기화 엔진의 스토리지 코어를 Rust로 작성했습니다(수십만 대 규모에서 메모리·정확성). Cloudflare는 Nginx를 대체하는 프록시 `Pingora`를 Rust로 만들어 하루 수조 건의 요청을 처리하며 CPU·메모리를 크게 절감했습니다. AWS는 Lambda·Fargate를 떠받치는 마이크로VM 모니터 `Firecracker`를 Rust로 작성했습니다 — 멀티테넌트 격리에서 메모리 안전성은 타협 불가입니다. Discord는 앞서 본 대로 GC 스파이크를 피하려 Go에서 Rust로 갈아탔습니다.
+
+공통분모가 보이시나요? **메모리 안전성이 보안·정확성과 직결되거나, 일관된 저(低)레이턴시·고처리량이 비즈니스 가치인 곳.** 그리고 결정적으로, 이들 대부분은 **전체를 Rust로 만든 게 아니라 핫스팟만 Rust로 만들었습니다.** Pydantic은 검증 엔진만, Cryptography는 파서만. 이것이 Python 개발자에게 Rust가 주는 가장 현실적인 가치입니다.
+
+---
+
+## 1.5 언제 Rust를 쓰지 *말아야* 하는가 (균형 잡힌 시각)
+
+여기까지 읽고 "당장 모든 걸 Rust로 다시 써야겠다"고 느꼈다면, 잠깐 멈추십시오. 그것은 거의 항상 나쁜 결정입니다. Rust는 만능이 아니며, Python이 압도적으로 옳은 영역이 넓습니다.
+
+**프로토타이핑과 탐색적 작업.** 가설을 빠르게 검증하는 단계, Jupyter에서 데이터를 휘젓는 단계, 요구사항이 매일 바뀌는 초기 제품 — 여기서는 Python의 작성 속도가 곧 경쟁력입니다. Rust의 컴파일러를 만족시키느라 보내는 시간은 "이 기능이 필요한지조차 모르는" 단계에서는 순수한 낭비입니다.
+
+**얕고 넓은 글루(glue) 코드.** 외부 API 몇 개를 호출해 결과를 합치는 스크립트, 일회성 ETL, 운영 자동화 — 실행 시간의 99%가 네트워크 대기인 코드를 Rust로 짜도 빨라지지 않습니다. 병목이 CPU가 아니니까요.
+
+**에코시스템 의존성.** 데이터 사이언스·머신러닝의 라이브러리 생태계(scikit-learn, PyTorch, Hugging Face, 수많은 도메인 패키지)는 Python이 압도적입니다. Rust로 같은 일을 하려면 없는 라이브러리를 직접 만들어야 할 수 있습니다.
+
+**팀의 학습 곡선.** 소유권·대여·수명(4~6장)은 진입 장벽이 실재합니다. 평균적인 Python 팀이 Rust로 생산성을 회복하는 데는 수 주~수 개월이 걸립니다. 그 비용이 성능 이득보다 큰 프로젝트가 대부분입니다.
+
+> 💡 **현명한 전략 — "둘 다"**: 정답은 보통 "Python을 Rust로 대체"가 아니라 **"Python으로 99%, Rust로 핫스팟 1%"**입니다. 비즈니스 로직·웹 핸들러·오케스트레이션은 Python(Django/FastAPI)으로 두고, 프로파일러가 가리키는 진짜 병목(파싱·수치 연산·암호화·직렬화)만 Rust로 떼어내 PyO3로 `import`해 씁니다. Pydantic·Polars·Cryptography가 정확히 이 길을 갔습니다. 22장에서 `pandas` 병목을 Rust+PyO3 모듈로 떼어내 가속하는 실전 예제를 직접 만들어 봅니다. **Rust를 배우는 것은 Python을 버리는 게 아니라, Python이 끝나는 지점에서 쓸 무기를 얻는 것입니다.**
+
+---
+
+## 1.6 Best Practices & 흔한 함정
+
+### Best Practices 체크리스트
+
+- [ ] **먼저 측정하라, 그다음 Rust를 꺼내라.** `cProfile`/`py-spy`로 진짜 병목을 찾기 전에는 Rust를 도입하지 마십시오. 추측에 기반한 최적화는 대부분 엉뚱한 곳을 고칩니다.
+- [ ] **벤치마크는 항상 `--release`로.** Rust 디버그 빌드는 릴리스보다 10~100배 느립니다. `cargo run`(디버그)과 `cargo run --release`를 헷갈리면 "Rust가 Python보다 느리다"는 황당한 결론이 나옵니다(2장에서 빌드 모드를 다룹니다).
+- [ ] **벤치마크 정직성을 지켜라.** 측정 시 입력 크기·빌드 모드·반복 횟수를 명시하고, `black_box`(또는 `criterion` 크레이트)로 컴파일러가 코드를 지워버리지 않게 하십시오.
+- [ ] **전부 다 포팅하지 마라.** 핫스팟만 떼어내는 하이브리드 전략을 기본값으로 삼으십시오.
+- [ ] **컴파일러 에러를 적으로 보지 마라.** `rustc`의 에러 메시지는 업계 최고 수준입니다. 에러 코드(`E0382` 등)와 `help:` 제안을 끝까지 읽으면 대부분 스스로 고칠 수 있습니다. 이것은 코드 리뷰어가 무료로 붙은 것과 같습니다.
+
+### 흔한 함정 (Python 개발자가 자주 하는 실수)
+
+**함정 1 — "변수는 그냥 라벨"이라는 Python 직관.** Python에서 `b = a`는 같은 객체에 라벨을 하나 더 붙이는 것일 뿐, 둘 다 멀쩡히 씁니다. Rust에서 힙 데이터를 대입하면 **소유권이 이동(move)**하고 원래 변수는 무효화됩니다.
+
+```rust
+fn main() {
+    let s = String::from("hello");
+    let s2 = s;          // 소유권이 s -> s2로 이동(move)
+    println!("{s}");     // 🚨 컴파일 에러! s는 이제 무효
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `s`
+ --> src/main.rs:4:16
+  |
+2 |     let s = String::from("hello");
+  |         - move occurs because `s` has type `String`,
+  |           which does not implement the `Copy` trait
+3 |     let s2 = s;
+  |              - value moved here
+4 |     println!("{s}");
+  |                ^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+3 |     let s2 = s.clone();
+  |               ++++++++
+```
+
+이 `error[E0382]`는 Python 개발자가 Rust에서 가장 먼저 마주치는 벽이며, 동시에 Rust 멘탈 모델의 정수입니다. 컴파일러는 친절하게 `.clone()`을 제안하지만, 진짜 해법은 "정말 두 개의 독립된 복사본이 필요한가, 아니면 빌려 쓰면(`&s`) 되는가"를 묻는 것입니다. 이 전체 그림은 4·5장의 주제입니다.
+
+**함정 2 — "디버그 빌드로 벤치마크하기".** `cargo run`만 해보고 "어? Python보다 느린데?"라고 결론짓는 경우. 디버그 빌드는 최적화가 꺼져 있습니다. 항상 `--release`로 비교하십시오.
+
+**함정 3 — `.clone()` 남발로 빌림 검사기 회피하기.** 컴파일 에러를 빨리 없애려 모든 곳에 `.clone()`을 박으면 컴파일은 되지만, 매번 힙 데이터를 통째로 복사해 Python보다 느려질 수 있습니다. `.clone()`은 "여기서 진짜 복사가 일어난다"는 명시적 신호입니다 — 무심코 쓰지 마십시오.
+
+**함정 4 — "Rust로 짜면 무조건 빠르다"는 미신.** I/O 바운드 코드, 또는 이미 NumPy/Polars가 네이티브로 처리하는 코드를 Rust로 옮겨도 빨라지지 않습니다. 병목이 CPU 인터프리터 루프일 때만 그 100배가 나옵니다.
+
+---
+
+이 챕터에서 우리는 Python의 생산성이 어떤 런타임 비용 위에 서 있는지(PyObject 28바이트, GIL, 동적 디스패치), 그리고 Rust가 그 비용을 어떻게 컴파일 타임으로 옮기는지(단일형화, 소유권, GC 없는 결정론적 해제)를 메모리 바이트와 컴파일러 에러 메시지 수준에서 확인했습니다. 핵심은 "Python을 버려라"가 아니라, **"Python이 끝나는 지점에서 쓸 무기를 손에 넣어라"**입니다.
+
+하지만 새 언어를 배우는 가장 큰 장벽은 문법이 아니라 **도구 생태계**입니다. `pip`인지 `poetry`인지 `uv`인지, `venv`를 어떻게 활성화하는지, `requirements.txt`와 `pyproject.toml`이 왜 따로 노는지 — 우리는 이 파편화된 도구들을 엮느라 너무 많은 시간을 썼습니다. 다음 [Chapter 2](./chapter_02.md)에서는 이 모든 것을 단 하나의 도구로 통합한 Rust의 `Cargo`를 만나, 패키징 지옥에서 영원히 탈출하는 법을 봅니다.
