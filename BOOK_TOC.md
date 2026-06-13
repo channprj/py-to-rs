@@ -3,11 +3,15 @@
 ## 기획 의도 및 집필 방향
 * **타겟 독자**: 10년 차 이상의 Python 백엔드/데이터 엔지니어 (CS 전공자)
 * **핵심 컨셉**: "기초 문법 나열"이 아닌, **"Python 코드와의 1:1 대응 및 내부 메모리 구조/어셈블리 관점의 예제 중심 비교"**
-* **분량**: 총 8부, 22장으로 구성된 약 600페이지 분량의 심도 있는 기술 서적.
+* **분량**: 총 8부, 22장 + 서문 + 부록 5종으로 구성된 약 600페이지 분량의 심도 있는 기술 서적.
+* **집필 현황**: 22개 챕터 본문, 서문, 부록 5종 모두 작성 완료. 모든 Rust 예제·컴파일러 에러는 실제 `rustc`/`cargo`로 검증.
 
 ---
 
 ## 📚 목차 (Table of Contents)
+
+### 시작하기 (Front Matter)
+* **[서문 · 이 책을 읽는 법 · 개발 환경 설정](./frontmatter.md)**
 
 ### Part 1: 기반 다지기 (Foundations & Tooling)
 * **Chapter 1. 왜 Python 개발자가 Rust를 배워야 하는가?**
@@ -104,6 +108,13 @@
   * `maturin`을 활용한 Rust로 Python Native Extension 작성하기
   * Python 객체를 Rust에서 조작하기 (PyAny, PyDict 등) 및 GIL 릴리즈
   * [예제] Python `pandas`로 느린 병목 구간의 데이터 처리를 Rust + PyO3로 모듈화하여 50배 최적화하기
+
+### 부록 (Appendices)
+* **[부록 A. Cargo & 프로젝트 레퍼런스](./appendices/appendix_a_cargo.md)** — 명령어/`Cargo.toml`/프로파일/rustup 빠른 참조
+* **[부록 B. 컴파일러 에러 해독집](./appendices/appendix_b_errors.md)** — 자주 만나는 18종 에러 코드의 원인과 해결
+* **[부록 C. Python → Rust 치트시트](./appendices/appendix_c_cheatsheet.md)** — 관용구 1:1 번역 표
+* **[부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)** — 도메인별 라이브러리 대응표
+* **[부록 E. Python → Rust 마이그레이션 플레이북](./appendices/appendix_e_migration.md)** — 핫스팟 이전 전략과 체크리스트
 
 ---
 ## 📝 집필 방식 (Sample)
