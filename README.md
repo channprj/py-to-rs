@@ -23,19 +23,23 @@
 상세 목차와 집필 방향은 **[BOOK_TOC.md](./BOOK_TOC.md)** 를 참고하세요.
 
 ### 시작하기
+
 - [서문 · 이 책을 읽는 법 · 개발 환경 설정](./frontmatter.md)
 
-### Part 1. 기반 다지기 (Foundations & Tooling)
+### Part 1. 기반 다지기 (Foundations &amp; Tooling)
+
 - [Chapter 1. 왜 Python 개발자가 Rust를 배워야 하는가?](./chapters/chapter_01.md)
 - [Chapter 2. 도구 생태계: 패키징 지옥에서 벗어나기](./chapters/chapter_02.md)
 - [Chapter 3. 문법의 이면: 표현식과 타입 시스템](./chapters/chapter_03.md)
 
 ### Part 2. 핵심 패러다임 전환 (The Paradigm Shift)
+
 - [Chapter 4. 소유권(Ownership): GC 없이 살아남기](./chapters/chapter_04.md)
-- [Chapter 5. 참조와 대여(Borrowing & References)](./chapters/chapter_05.md)
+- [Chapter 5. 참조와 대여(Borrowing &amp; References)](./chapters/chapter_05.md)
 - [Chapter 6. 수명(Lifetimes): 컴파일러에게 의도 설명하기](./chapters/chapter_06.md)
 
 ### Part 3. 데이터 모델링 (Python OOP의 해체)
+
 - [Chapter 7. Struct와 데이터 모델링 (`dataclass`/`Pydantic` 대체)](./chapters/chapter_07.md)
 - [Chapter 8. 상속의 종말과 컴포지션](./chapters/chapter_08.md)
 - [Chapter 9. 매직 메서드(Dunder)에서 Trait으로](./chapters/chapter_09.md)
@@ -43,28 +47,34 @@
 - [Chapter 11. 믹스인 패턴과 생성 패턴(Builder)](./chapters/chapter_11.md)
 
 ### Part 4. 우아한 실패 (Error Handling)
+
 - [Chapter 12. `try-except`는 없다: `Option`과 `Result`](./chapters/chapter_12.md)
 - [Chapter 13. 에러 전파와 커스텀 에러 설계 (`thiserror`/`anyhow`)](./chapters/chapter_13.md)
 
-### Part 5. 컬렉션과 이터레이터 (Collections & Iteration)
+### Part 5. 컬렉션과 이터레이터 (Collections &amp; Iteration)
+
 - [Chapter 14. 소유권을 가진 스마트 포인터 컬렉션 (`Vec`/`HashMap`/`String`)](./chapters/chapter_14.md)
 - [Chapter 15. 이터레이터와 제너레이터](./chapters/chapter_15.md)
 
-### Part 6. GIL의 해방과 동시성 (Concurrency & Async)
+### Part 6. GIL의 해방과 동시성 (Concurrency &amp; Async)
+
 - [Chapter 16. 멀티스레딩: `threading` 모듈의 한계 돌파](./chapters/chapter_16.md)
 - [Chapter 17. 상태 공유와 동기화 (`Arc`/`Mutex`/`RwLock`)](./chapters/chapter_17.md)
 - [Chapter 18. 비동기 프로그래밍 (`asyncio` vs `tokio`)](./chapters/chapter_18.md)
 
 ### Part 7. 메타프로그래밍과 깊은 곳으로 (Advanced Rust)
+
 - [Chapter 19. 매크로: 데코레이터/메타클래스의 대체재](./chapters/chapter_19.md)
 - [Chapter 20. 스마트 포인터와 메모리 트릭 (`Box`/`Rc`/`RefCell`)](./chapters/chapter_20.md)
 
 ### Part 8. 궁극의 브릿지 (Python 🤝 Rust)
+
 - [Chapter 21. C FFI와 Unsafe Rust](./chapters/chapter_21.md)
 - [Chapter 22. PyO3: Python과 Rust의 완벽한 결합](./chapters/chapter_22.md)
 
 ### 부록 (Appendices)
-- [부록 A. Cargo & 프로젝트 레퍼런스](./appendices/appendix_a_cargo.md)
+
+- [부록 A. Cargo &amp; 프로젝트 레퍼런스](./appendices/appendix_a_cargo.md)
 - [부록 B. 컴파일러 에러 해독집](./appendices/appendix_b_errors.md)
 - [부록 C. Python → Rust 치트시트](./appendices/appendix_c_cheatsheet.md)
 - [부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)
