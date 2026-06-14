@@ -230,7 +230,7 @@ Rust의 추론 엔진은 **Hindley-Milner(힌들리-밀너) 타입 시스템** �
 
 ```rust
 fn main() {
-    // 🚨 error[E0282]: type annotations needed
+    // 🚨 error[E0284]: type annotations needed for `Result<_, _>`
     // let parsed = "42".parse().unwrap();
 
     let parsed: i32 = "42".parse().unwrap(); // 타입 명시로 해결
@@ -254,10 +254,13 @@ fn main() {
 
 ```python
 import sys
-print(sys.getsizeof(1))     # 28  (작은 정수)
-print(sys.getsizeof(10**30)) # 44  (임의정밀도: 자릿수가 늘면 객체도 커짐)
+print(sys.getsizeof(1))      # 28  (작은 정수)
+print(sys.getsizeof(2**40))  # 32  (1 디지트로 부족 → 2 디지트)
+print(sys.getsizeof(10**30)) # 40  (임의정밀도: 자릿수가 늘면 객체도 커짐)
 print(sys.getsizeof(True))   # 28
 ```
+
+> 🚨 **빌드 의존 caveat**: `sys.getsizeof(10**30)`의 값은 CPython의 빌드 설정에 따라 달라집니다. 위 `40`은 **30비트 디지트(`PYLONG_BITS_IN_DIGIT=30`)** 로 빌드된 표준 64비트 CPython 3.13.6에서 측정한 값입니다. `10**30 ≈ 2^99.66`이므로 30비트 디지트로는 4개(`ceil(99.66/30)`)가 필요하고, 헤더 28바이트 + (4−1)×4바이트 = **40바이트**가 됩니다. 만약 15비트 디지트로 빌드된 인터프리터라면 디지트가 7개 필요해 같은 값이 더 큰 바이트로 나옵니다. 즉 이 숫자는 "값의 크기"가 아니라 "값 + 빌드 설정"의 함수입니다. 책의 모든 측정값은 Python 3.13.6(30비트 디지트, 64비트) 기준입니다.
 
 `int` 하나가 **28바이트**입니다. 이 28바이트는 다음으로 구성됩니다(64비트 CPython 기준).
 
@@ -301,7 +304,7 @@ usize=8, isize=8
 몇 가지 짚어둘 점이 있습니다.
 
 - **`bool`은 1바이트**입니다. 비트 하나면 충분할 것 같지만, CPU는 바이트 단위로 주소를 매기므로 1바이트가 최소 단위입니다.
-- **`char`는 4바이트**입니다. C의 `char`(1바이트)와 헷갈리면 안 됩니다. Rust의 `char`는 **유니코드 스칼라 값(Unicode Scalar Value)**, 즉 `'a'`부터 `'😀'`, `'한'`까지 어떤 코드포인트든 담을 수 있는 4바이트(U+0000 ~ U+10FFFF)입니다. 파이썬 3의 문자열도 유니코드지만, Rust는 *한 글자*의 크기를 타입 수준에서 4바이트로 못 박았습니다.
+- **`char`는 4바이트**입니다. C의 `char`(1바이트)와 헷갈리면 안 됩니다. Rust의 `char`는 **유니코드 스칼라 값(Unicode Scalar Value)**, 즉 `'a'`부터 `'😀'`, `'한'`까지 어떤 코드포인트든 담을 수 있는 4바이트(U+0000 ~ U+10FFFF)입니다. 파이썬 3의 문자열도 유니코드지만, Rust는 *한 글자*의 크기를 타입 수준에서 4바이트로 못 박았습니다. 반면 파이썬에서 "한 글자"는 길이 1짜리 `str` 객체이고, CPython 3.13.6에서 `sys.getsizeof('a')`는 **42바이트**입니다(빈 문자열 `sys.getsizeof('')`가 41바이트, ASCII 한 글자당 +1). 참고로 이 책의 일부 옛 자료에 등장하는 "str=49바이트"는 Python 3.12 시절 값으로, 3.13.6에서는 `41 + 글자수`(순수 ASCII 기준)로 바뀌었습니다. 즉 Rust의 `char` 한 개(4바이트)는 파이썬의 한 글자 `str` 객체(42바이트)보다 10배 이상 가볍고, 객체 헤더도 참조 카운트도 없습니다.
 - **`usize`/`isize`는 플랫폼의 포인터 크기**입니다. 64비트 머신에서 8바이트. 배열 인덱싱과 컬렉션 길이는 항상 `usize`를 씁니다. "이 정수가 메모리 주소를 표현할 수 있는가"를 타입으로 구분하는 셈입니다.
 
 > **Under the Hood — 28바이트 vs 4바이트, 그리고 캐시**
@@ -366,7 +369,7 @@ fn main() {
 |------|----------------|------|
 | 정수 `int` | 힙 객체, 최소 28바이트 + 8바이트 포인터 | 스택, `i32`=4바이트(헤더 없음) |
 | 불리언 | `True`/`False` 싱글턴 객체(28바이트) | `bool` = 1바이트 |
-| 한 글자 | `str` 객체(49바이트~) | `char` = 4바이트(유니코드 스칼라) |
+| 한 글자 | `str` 객체(42바이트, 3.13.6 측정) | `char` = 4바이트(유니코드 스칼라) |
 | "값 없음" | `None` 싱글턴 객체(포인터 8바이트) | `()` = 0바이트 |
 | 객체 속성 | `__dict__` 해시맵 조회 | 구조체 필드, 컴파일 타임 오프셋 |
 | 컬렉션 | 포인터 배열 + 파편화된 힙 객체 | 연속 메모리 블록(`Vec<T>`) |
@@ -766,6 +769,298 @@ let grade = if score >= 90 { "A" }
 ```
 
 표현식 버전은 가짜 초기값이 없고, 모든 경로가 값을 만들도록 컴파일러가 강제합니다.
+
+**함정 6: 인덱스를 `i32`로 들고 다니다 — `len()`은 `usize`를 반환한다**
+
+파이썬에서 `for i in range(len(v))`의 `i`는 그냥 `int`였고, `v[i]`도, `v[i-1]`도, `v[-1]`도 다 똑같이 잘 돌아갔습니다. Rust로 옮기면서 무심코 `let idx: i32 = ...`로 인덱스를 잡으면, 컬렉션 인덱싱 순간 막힙니다. **슬라이스/`Vec` 인덱싱과 `.len()`은 항상 `usize`**이기 때문입니다.
+
+```rust
+fn main() {
+    let v = vec![10, 20, 30];
+    let idx: i32 = 1;
+    let x = v[idx]; // 🚨 i32로 인덱싱 시도
+    println!("{x}");
+}
+```
+
+```text
+error[E0277]: the type `[{integer}]` cannot be indexed by `i32`
+ --> src/main.rs:4:15
+  |
+4 |     let x = v[idx]; // i32로 인덱싱 시도
+  |               ^^^ slice indices are of type `usize` or ranges of `usize`
+  |
+  = help: the trait `SliceIndex<[{integer}]>` is not implemented for `i32`
+```
+
+`error[E0277]: ... cannot be indexed by i32`. 인덱스는 부호 없는 포인터 크기 정수(`usize`)여야 합니다. 메모리 주소에 음수가 없듯, "몇 번째 원소"에도 음수가 없다는 타입 수준의 선언입니다.
+
+더 음흉한 변형은 *캐스팅으로 에러를 덮은 뒤* 산술에서 터지는 경우입니다. `len()`이 `usize`라는 사실은, 파이썬에서 자연스럽던 `v[len(v) - 1]`(마지막 원소)을 위험하게 만듭니다.
+
+```rust
+fn main() {
+    let v: Vec<i32> = vec![]; // 빈 벡터
+    let last = v.len() - 1;   // 🚨 0usize - 1 → 언더플로
+    println!("{}", v[last]);
+}
+```
+
+```text
+thread 'main' panicked at src/main.rs:3:16:
+attempt to subtract with overflow
+```
+
+`v.len()`이 `0`(`usize`)인데 `1`을 빼면 음수 `-1`이 아니라 **언더플로**가 일어납니다. `usize`는 0 미만이 없어서, 디버그 빌드에서는 `attempt to subtract with overflow`로 패닉하고(3.6절의 오버플로 검사와 동일한 메커니즘), 릴리스 빌드에서는 `18446744073709551615`(`usize::MAX`)로 래핑되어 곧장 인덱스 범위 밖 패닉으로 이어집니다. 파이썬이라면 `v[-1]`이 빈 리스트에서 `IndexError`를 냈겠지만, 여기서는 *뺄셈 단계*에서 이미 사고가 납니다.
+
+**해결:**
+- 인덱스는 처음부터 `usize`로 잡으세요(`let idx: usize = 1;`). `len()`과 자연스럽게 맞물립니다.
+- "마지막 원소"는 직접 빼지 말고 `v.last()`(→ `Option<&T>`)를 쓰세요. 빈 컬렉션이면 `None`을 받아 안전합니다.
+- 역순 순회는 `for i in (0..v.len()).rev()`처럼 `usize` 범위를 만들고 `.rev()`로 뒤집으세요. `(v.len()-1)..=0` 같은 직접 감산은 언더플로의 함정입니다.
+- 정수 인덱스를 *계산*해야 한다면 `usize` 안에서 `checked_sub`로 언더플로를 `Option`으로 받으세요: `v.len().checked_sub(1)`.
+
+> 💡 **핵심**: `usize`는 "이 정수는 메모리/컬렉션의 크기·위치를 표현한다"는 타입 수준 선언입니다. `i32`/`i64`는 도메인 수치(개수, 금액, 좌표)에 쓰고, *인덱스·길이·오프셋은 `usize`*로 통일하세요. 둘을 섞는 순간 `as` 캐스팅이 코드에 번지고, 그 캐스팅 하나하나가 3.6절에서 본 조용한 데이터 손상의 입구가 됩니다.
+
+---
+
+## 3.11 벤치마크: 1천만 정수 합산 — CPython 리스트 vs Rust `Vec<i64>`
+
+이 챕터의 모든 주장("헤더 없는 연속 배열이 빠르다")을 한 번에 검증해 봅시다. 가장 단순하고 정직한 워크로드, **0부터 9,999,999까지 1천만 개 정수의 합산**입니다. 알고리즘은 양쪽 다 동일한 $O(n)$ 단일 패스이므로, 측정되는 것은 순수하게 *언어/런타임/메모리 레이아웃의 비용*입니다.
+
+먼저 파이썬입니다. 두 가지로 측정합니다 — C로 구현된 내장 `sum()`(파이썬에 가장 유리한 경우)과, Rust 루프와 1:1로 대응하는 명시적 `for` 루프.
+
+```python
+import timeit
+
+data = list(range(10_000_000))
+
+def loop_sum(v: list[int]) -> int:
+    total = 0
+    for x in v:
+        total += x
+    return total
+
+t_builtin = timeit.timeit(lambda: sum(data), number=10) / 10
+t_loop = timeit.timeit(lambda: loop_sum(data), number=5) / 5
+print(f"builtin sum(): {t_builtin*1000:.1f} ms")
+print(f"explicit loop: {t_loop*1000:.1f} ms")
+```
+
+Rust 쪽은 `criterion`으로 측정합니다. 마이크로벤치마크의 최대 적은 컴파일러의 과도한 최적화입니다. 합산 결과를 안 쓰면 LLVM이 루프 전체를 상수로 접거나(상수 폴딩) 통째로 삭제(dead code elimination)해서 "0ns"라는 거짓말이 나오기 때문입니다. `criterion`의 `black_box`로 입력을 불투명하게 감싸 이를 막습니다.
+
+```toml
+# Cargo.toml
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "sum_bench"
+harness = false
+```
+
+```rust
+// benches/sum_bench.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+fn sum_vec(v: &[i64]) -> i64 {
+    let mut total = 0i64;
+    for &x in v {
+        total += x;
+    }
+    total
+}
+
+fn bench_sum(c: &mut Criterion) {
+    let data: Vec<i64> = (0..10_000_000i64).collect();
+    c.bench_function("sum_10m_i64", |b| {
+        // black_box: 컴파일러가 data를 "알 수 없는 입력"으로 취급하게 강제
+        b.iter(|| sum_vec(black_box(&data)))
+    });
+}
+
+criterion_group!(benches, bench_sum);
+criterion_main!(benches);
+```
+
+`cargo bench`로 측정한 실제 결과입니다(Apple Silicon, rustc 1.96.0 핀, `--release` 자동 적용).
+
+```text
+sum_10m_i64             time:   [1.864 ms 1.960 ms 2.063 ms]
+```
+
+세 측정을 한 표로 모으면 이렇습니다(같은 머신, 같은 1천만 원소).
+
+| 구현 | 시간 | Rust 대비 배수 | 무엇을 측정하나 |
+|------|------|----------------|----------------|
+| Rust `Vec<i64>` 루프 (`--release`) | **약 1.96 ms** | 1× (기준) | 연속 메모리 + 인라인된 단일 패스 |
+| CPython 내장 `sum()` | 약 27 ms | **약 14배 느림** | C 루프지만 매 원소 `PyObject` 역참조 |
+| CPython 명시적 `for` 루프 | 약 156 ms | **약 80배 느림** | 바이트코드 디스패치 + 박싱된 정수 |
+
+> 💡 **정직한 해석**: "Rust가 파이썬보다 80배 빠르다"는 표현은 *명시적 루프 대 명시적 루프*일 때만 맞습니다. 파이썬을 잘 쓰는 사람은 `sum()`을 쓰고, 그러면 격차는 14배로 줄어듭니다. 더 나아가 `numpy.arange(10_000_000).sum()`은 약 4~5 ms로, Rust와 같은 자릿수(2~3배 차이)까지 좁혀집니다. 왜냐면 `numpy`의 내부가 바로 이 "헤더 없는 연속 배열 + 네이티브 단일 패스"이기 때문입니다. 즉 **이 벤치마크의 진짜 교훈은 "Rust가 빠르다"가 아니라, "박싱된 객체의 포인터 추격을 없애면 빨라지고, Rust는 그것을 언어 기본값으로 준다"**는 것입니다. `numpy`는 같은 일을 C 확장으로 따로 해야 했습니다.
+
+> **Under the Hood — 80배는 어디서 나오는가**
+>
+> 파이썬 명시적 루프의 매 반복은 (1) 바이트코드 `FOR_ITER` 디스패치, (2) 리스트에서 다음 `PyObject*` 포인터를 꺼내 *힙의 다른 위치로 점프*(포인터 추격, 캐시 미스 유발), (3) `int` 객체에서 실제 값을 언박싱, (4) `total += x`를 위한 `PyNumber_Add` 호출과 *새 `int` 객체 할당*(파이썬 int는 불변이라 누적합마다 새 객체 생성)을 수행합니다. 1천만 번 × 이 모든 단계입니다. Rust `sum_vec`은 `--release`에서 LLVM이 루프를 자동 벡터화(SIMD)하거나 최소한 레지스터 위에서 도는 타이트한 기계어로 컴파일하고, `&[i64]`는 64바이트 캐시 라인당 정수 8개를 한꺼번에 끌어옵니다. 객체 헤더도, 할당도, 디스패치도 없습니다. 메모리도 마찬가지입니다 — 1천만 `i64`는 정확히 **80 MB의 연속 블록 하나**(`10_000_000 × 8`)인 반면, 파이썬 `list`는 80 MB의 포인터 배열 + 그 포인터들이 가리키는 약 280 MB의 흩어진 `int` 객체(0~255는 캐시되어 공유, 나머지는 각 28바이트)로 **도합 약 360 MB**를 씁니다. 4.5배의 메모리, 그리고 그 파편화가 곧 캐시 미스이고, 캐시 미스가 곧 80배입니다.
+
+---
+
+## 3.12 표현 최적화 심화: 니치 최적화(Niche Optimization)
+
+3.5절에서 `()`가 0바이트라는 사실을 봤습니다. 이제 그보다 더 영리한, 그러나 *측정 없이는 믿기 어려운* 최적화를 봅시다. 파이썬에서 "값이 있을 수도, 없을 수도 있음"은 `Optional[int]` 힌트 + 런타임의 `None` 객체(포인터 8바이트 + 싱글턴)로 표현됩니다. Rust에서는 `Option<T>`라는 열거형으로 표현되는데, 이게 *공짜에 가깝게* 구현됩니다.
+
+먼저 직접 측정해 봅시다.
+
+```rust
+use std::mem::size_of;
+
+fn main() {
+    println!("bool         = {}", size_of::<bool>());          // 1
+    println!("Option<bool> = {}", size_of::<Option<bool>>());  // 1  ← 늘지 않음!
+    println!("char         = {}", size_of::<char>());          // 4
+    println!("Option<char> = {}", size_of::<Option<char>>());  // 4  ← 늘지 않음!
+    println!("u8           = {}", size_of::<u8>());            // 1
+    println!("Option<u8>   = {}", size_of::<Option<u8>>());    // 2  ← 늘어남!
+    println!("&i32         = {}", size_of::<&i32>());          // 8
+    println!("Option<&i32> = {}", size_of::<Option<&i32>>());  // 8  ← 늘지 않음!
+}
+```
+
+실제 실행 결과입니다.
+
+```text
+bool         = 1
+Option<bool> = 1
+char         = 4
+Option<char> = 4
+u8           = 1
+Option<u8>   = 2
+&i32         = 8
+Option<&i32> = 8
+```
+
+`Option<bool>`이 `bool`과 똑같이 **1바이트**이고, `Option<char>`도 `char`와 똑같이 **4바이트**입니다. `None`이라는 "추가 상태"를 담으려면 보통 태그 바이트가 하나 더 필요할 텐데, 어떻게 0바이트로 끼워 넣었을까요? 반면 `Option<u8>`은 `2`바이트로 *늘어났습니다.* 이 차이가 핵심입니다.
+
+> **Under the Hood — 니치(Niche): 쓰이지 않는 비트 패턴 재활용**
+>
+> `bool`은 1바이트(256개 비트 패턴)를 차지하지만, 유효한 값은 `false=0`과 `true=1` 단 두 개뿐입니다. 나머지 `2..=255`의 254개 패턴은 *절대 나타나지 않는 빈자리*, 즉 **니치(Niche)** 입니다. Rust 컴파일러는 `Option<bool>`을 만들 때 별도 태그를 두는 대신, 이 빈자리 하나(예: `2`)를 `None`의 표지로 재활용합니다. 그래서 `Some(false)=0`, `Some(true)=1`, `None=2`가 한 바이트 안에 다 들어갑니다. `char`도 마찬가지입니다 — 유니코드 스칼라 값은 `U+0000..=U+10FFFF`(서로게이트 `U+D800..=U+DFFF` 제외)만 유효해서, 4바이트 안에 쓰이지 않는 거대한 니치 영역이 있고 그중 하나가 `None`이 됩니다. `&i32`(참조)는 *null이 될 수 없다*는 Rust의 불변식 덕분에 `0`이라는 비트 패턴이 영원히 니치이고, 그래서 `Option<&i32>`도 8바이트입니다(C의 "널 포인터로 부재 표현"을 타입 안전하게 흡수). 반대로 `u8`은 `0..=255` *전부*가 유효한 값이라 니치가 없습니다. 그래서 `Option<u8>`은 어쩔 수 없이 태그 1바이트를 덧붙여 2바이트가 됩니다(정렬상 패딩은 없음). 이것이 **니치 최적화(Niche Optimization)**, 또는 역사적 이름으로 "널 포인터 최적화(Null Pointer Optimization)"입니다.
+
+이 최적화는 중첩에서도 작동합니다. `Option<Option<bool>>`을 측정하면 여전히 **1바이트**입니다. `bool`의 254개 빈자리 중 둘을 각각 `None`(바깥)과 `Some(None)`(안쪽)에 배정하면 되니까요.
+
+```rust
+use std::mem::size_of;
+
+fn main() {
+    println!("Option<Option<bool>> = {}", size_of::<Option<Option<bool>>>()); // 1
+}
+```
+
+이 원리는 여러분이 직접 만드는 열거형에도 그대로 적용됩니다. 페이로드에 니치가 있으면 태그가 공짜가 됩니다.
+
+```rust
+use std::mem::size_of;
+
+// 페이로드 bool에 니치가 있음 → 태그 불필요
+enum Toggle {
+    On(bool),
+    Pending,
+}
+
+// 페이로드 u8은 모든 값을 쓰므로 니치 없음 → 태그 1바이트 필요
+enum Level {
+    Set(u8),
+    Unset,
+}
+
+fn main() {
+    println!("Toggle = {}", size_of::<Toggle>()); // 1 (니치 재활용)
+    println!("Level  = {}", size_of::<Level>());   // 2 (태그 1 + u8 1)
+}
+```
+
+> 💡 **핵심**: `Option<T>`는 파이썬의 `Optional[T]`와 의미는 같지만(Chapter 12에서 본격적으로 다룹니다) 비용 모델이 정반대입니다. 파이썬의 `None`은 *항상* 포인터 한 칸과 싱글턴 객체를 끌고 다니지만, Rust의 `Option`은 페이로드 타입에 니치가 있으면 **추가 비용 0바이트**입니다. "부재 가능성"이라는 가장 흔한 추상화조차 무비용 추상화(Zero-cost Abstraction)로 만든다는 Rust 철학의 가장 우아한 사례입니다. 그래서 Rust에서는 `Option<&T>`를 망설임 없이 쓸 수 있습니다 — C의 널 포인터와 *완전히 같은 메모리 표현*에, 컴파일러가 강제하는 null 검사가 공짜로 따라오니까요.
+
+---
+
+## 3.13 연습문제
+
+손으로 직접 풀어 보세요. Rustlings 스타일로, 머릿속 컴파일러를 먼저 돌리고 나서 실제 `rustc`로 검증하는 것이 핵심입니다. 각 문항 아래 **정답 스케치**에는 핵심 아이디어와, 틀렸을 때 마주칠 컴파일러 에러코드(또는 측정값)를 함께 적어 자기검증에 쓰도록 했습니다.
+
+**문제 1 (표현식).** 아래 함수가 컴파일되도록 빈칸을 채우세요. `if`를 *표현식*으로 써서 가변 변수 없이 한 번에 바인딩해야 합니다. 외부에 `let mut grade`를 두는 풀이는 정답으로 인정하지 않습니다.
+
+```rust
+fn grade(score: u32) -> char {
+    let g = /* 여기를 채우세요: 90+ 이면 'A', 80+ 이면 'B', 그 외 'F' */;
+    g
+}
+```
+
+> **정답 스케치.** `let g = if score >= 90 { 'A' } else if score >= 80 { 'B' } else { 'F' };`. 핵심은 모든 분기가 같은 타입(`char`)을 낳아야 하고, `else`가 반드시 있어야 한다는 점입니다(없으면 `None` 분기에서 `()`가 나와 타입 불일치). 마지막 `else`를 빠뜨리면 `error[E0308]: ... expected char, found ()`. 분기 중 하나에 `;`를 붙이면 그 분기가 `()`가 되어 같은 E0308을 봅니다.
+
+**문제 2 (타입 추론).** 다음 코드는 컴파일되지 않습니다. 에러코드를 예측하고, *두 가지 다른 방법*으로 고치세요. 그리고 "사용처의 `+ 8`이 타입을 정해주지 않을까?"라는 직관이 왜 빗나가는지 설명하세요.
+
+```rust
+fn main() {
+    let parsed = "42".parse().unwrap();
+    println!("{}", parsed + 8);
+}
+```
+
+> **정답 스케치.** 에러는 `error[E0284]: type annotations needed for Result<_, _>`입니다(흔히 E0282로 착각하지만, `parse()`는 연관 타입 `<_ as FromStr>::Err`까지 미정이라 E0284입니다). `parse()`는 `FromStr`를 구현한 어떤 타입으로든 변환 가능해서 컴파일러가 대상 타입을 못 정합니다. 두 가지 해법: (1) 좌변 명시 `let parsed: i32 = "42".parse().unwrap();`, (2) 터보피쉬 `let parsed = "42".parse::<i32>().unwrap();`. **함정 확인**: `+ 8`로 사용처에서 추론될 것 같지만, `.unwrap()`이 중간에 끼면 `Result<T, T::Err>`의 `T`와 `Err`를 *동시에* 풀어야 해서 사용처 정보만으로는 부족합니다(직접 `let parsed = "42".parse().unwrap(); let _ = parsed + 8i32;`를 컴파일해 E0284가 그대로 남음을 확인하세요). `.unwrap()` 없이 `let parsed = "42".parse::<i32>()`처럼 터보피쉬를 박거나 좌변 타입을 줘야 풀립니다.
+
+**문제 3 (섀도잉).** 아래 두 줄 중 하나만 컴파일됩니다. 어느 쪽이 되고 어느 쪽이 안 되는지, 그리고 안 되는 쪽의 에러코드를 답하세요.
+
+```rust
+// (A)
+let x = "   ";
+let x = x.len();
+
+// (B)
+let mut x = "   ";
+x = x.len();
+```
+
+> **정답 스케치.** **(A)는 컴파일되고 (B)는 안 됩니다.** (A)는 섀도잉 — 새 `let`이므로 같은 이름이지만 `&str → usize`로 *타입까지* 바꿀 수 있는 완전히 새로운 변수입니다. (B)는 `mut` 재할당 — `mut`은 *같은 타입* 안에서의 값 변경만 허용하므로 `&str` 변수에 `usize`를 넣으려다 `error[E0308]: mismatched types ... expected &str, found usize`로 막힙니다. 요지: 섀도잉 ≠ 가변. 섀도잉은 타입을 바꿀 수 있고, `mut`은 못 바꿉니다.
+
+**문제 4 (튜플).** 함수 `min_max`가 슬라이스의 (최솟값, 최댓값)을 튜플로 반환합니다. 호출부에서 구조분해(destructuring)로 두 값을 받으세요. 그리고 `let (lo, hi, mid) = min_max(&data);`로 받으면 어떤 에러가 나는지 예측하세요.
+
+```rust
+fn min_max(v: &[i32]) -> (i32, i32) {
+    let mut lo = v[0];
+    let mut hi = v[0];
+    for &x in &v[1..] {
+        if x < lo { lo = x; }
+        if x > hi { hi = x; }
+    }
+    (lo, hi) // 마지막 표현식이 튜플 반환
+}
+
+fn main() {
+    let data = [3, 1, 4, 1, 5, 9, 2, 6];
+    let /* 여기를 채우세요 */ = min_max(&data);
+    println!("min={lo} max={hi}");
+}
+```
+
+> **정답 스케치.** 빈칸은 `(lo, hi)`. 튜플 구조분해는 좌변 패턴의 원소 수가 우변 튜플의 항수(arity)와 *정확히* 일치해야 합니다. `(lo, hi, mid)`처럼 3개로 받으면 `error[E0308]: mismatched types ... expected a tuple with 2 elements, found one with 3 elements`. 이는 파이썬의 `lo, hi, mid = min_max(...)`가 런타임에 `ValueError: not enough values to unpack`로 터지는 것과 달리, *컴파일 타임*에 막힙니다.
+
+**문제 5 (Option).** `slice.first()`는 `Option<&i32>`를 반환합니다. 빈 슬라이스도 안전하게 다루도록, 첫 원소가 있으면 그 두 배를, 없으면 `0`을 반환하는 코드를 `match`로 작성하세요. 그리고 `size_of::<Option<&i32>>()`가 몇 바이트일지 예측하세요.
+
+```rust
+use std::mem::size_of;
+
+fn first_doubled(v: &[i32]) -> i32 {
+    match v.first() {
+        /* 여기를 채우세요 */
+    }
+}
+
+fn main() {
+    assert_eq!(first_doubled(&[10, 20, 30]), 20);
+    assert_eq!(first_doubled(&[]), 0);
+    println!("Option<&i32> = {}", size_of::<Option<&i32>>());
+}
+```
+
+> **정답 스케치.** 빈칸은 `Some(&n) => n * 2, None => 0,`. `Some(&n)`의 `&` 패턴이 `&i32`를 역참조해 `n: i32`를 묶어줍니다(`Some(n) => n * 2`로 쓰면 `n: &i32`라 `&i32 * i32`가 안 되어 에러). `match`는 망라적이어야 하므로 `Some`과 `None`을 모두 다뤄야 하고, 하나라도 빠지면 `error[E0004]: non-exhaustive patterns`. 측정값: `size_of::<Option<&i32>>()`는 **8**바이트입니다 — 참조는 null이 될 수 없어 `0`이 니치가 되고, 그 자리에 `None`이 들어가 추가 바이트 없이 8바이트(3.12절의 니치 최적화). 직접 실행해 `Option<&i32> = 8`을 확인하세요.
 
 ---
 

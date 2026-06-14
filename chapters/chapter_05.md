@@ -342,6 +342,52 @@ fn main() {
 3. **가변 참조와 불변 참조는 동시에 섞어 쓸 수 없다.**
 4. **참조의 수명은 마지막 사용까지다(NLL).** — 블록 끝까지가 아니다.
 
+### Under the Hood: `&mut T`의 `noalias`와 LLVM 최적화 (C의 `restrict`와 비교)
+
+XOR 규칙은 메모리 안전을 위한 안전벨트로만 보이기 쉽습니다. 하지만 이 규칙에는 안전과 무관한, *순수하게 성능을 위한* 두 번째 얼굴이 있습니다. 바로 컴파일러에게 **별칭이 없음(no aliasing)을 약속**한다는 점입니다. C 프로그래머라면 이 약속의 가치를 압니다 — C99의 `restrict` 키워드가 바로 그것이니까요.
+
+C에서 `void f(int *dst, int *src)`를 받으면, 컴파일러는 `dst`와 `src`가 같은 메모리를 가리킬 수도 있다고 가정해야 합니다(보수적 가정). 그래서 `*dst`를 두 번 더하는 코드라면 `*src`를 *매번 다시 읽어야* 합니다 — 첫 번째 `*dst += *src`가 `*src`를 바꿨을 가능성을 배제할 수 없으니까요. 개발자가 "이 둘은 절대 겹치지 않는다"고 `restrict`로 명시해야만 컴파일러가 `*src`를 한 번만 읽고 재사용하는 최적화를 합니다. 문제는 `restrict`가 *개발자의 약속*일 뿐, 컴파일러가 검증하지 못한다는 것입니다. 약속을 어기면 정의되지 않은 동작(UB)입니다.
+
+Rust에서는 이 약속이 공짜로, 그리고 컴파일러가 *검증한 채로* 주어집니다. `&mut T`는 정의상 그 데이터에 대한 유일한 접근 경로이므로(XOR 규칙), Rust는 LLVM에게 모든 `&mut` 인자에 `noalias` 속성을, 모든 `&` 인자에 `noalias readonly` 속성을 붙여 넘깁니다. 직접 확인해 봅시다.
+
+```rust
+#[no_mangle]
+pub fn add_assign(dst: &mut i64, src: &i64) {
+    *dst += *src;
+    *dst += *src;
+}
+```
+
+이것을 `rustc -O --emit=llvm-ir`로 컴파일하면 함수 시그니처에 `noalias`가 박힙니다.
+
+```text
+define void @add_assign(ptr noalias nocapture noundef align 8 ... %dst,
+                        ptr noalias nocapture noundef readonly align 8 ... %src)
+start:
+  %_3 = load i64, ptr %src       ; *src를 단 한 번만 읽음
+  %0  = load i64, ptr %dst
+  %reass.add = shl i64 %_3, 1    ; src << 1  =  src * 2
+  %1  = add i64 %0, %reass.add   ; dst + 2*src
+  store i64 %1, ptr %dst         ; 단 한 번만 씀
+  ret void
+```
+
+LLVM은 `*src`를 **단 한 번만 로드**하고, 두 번의 `+= *src`를 `dst + 2*src`로 접어(fold) 버렸습니다. `dst`와 `src`가 겹치지 않음을 `noalias`로 알기에 가능한 최적화입니다. 같은 로직을 `noalias`가 없는 원시 포인터(`*mut i64`, `*const i64`)로 쓰면 결과가 달라집니다.
+
+```text
+; unsafe fn add_assign_raw(dst: *mut i64, src: *const i64)
+  %_3 = load i64, ptr %src       ; 첫 번째 로드
+  ...
+  store i64 %1, ptr %dst
+  %_4 = load i64, ptr %src       ; src를 다시 읽음! (dst가 src를 바꿨을 수 있으니)
+  ...
+  store i64 %2, ptr %dst         ; 두 번째 store도 따로
+```
+
+`noalias`가 없으면 LLVM은 `*src`를 **두 번 로드하고 두 번 store**합니다 — C의 `restrict` 없는 코드와 정확히 같은 보수적 코드입니다. 즉 Rust의 XOR 규칙은 단지 버그를 막는 것을 넘어, *Fortran 수준의 별칭 정보*를 컴파일러에 무상으로 제공합니다. C가 `restrict`로 손수, 검증 없이, UB의 위험을 안고 얻어내던 최적화를, Rust는 `&mut`라는 평범한 참조를 쓰는 것만으로 안전하게 가져갑니다. (역사적 각주: rustc는 한때 LLVM의 `noalias` 버그로 이 속성을 끄기도 했지만, 현재는 안정적으로 방출합니다.)
+
+> 🚨 이 때문에 `unsafe`로 `&mut`의 별칭 규칙을 몰래 어기는 것은 단순한 "규칙 위반"이 아니라 **즉각적인 UB**입니다. 컴파일러는 이미 `noalias`를 믿고 코드를 최적화해 버렸기 때문에, 약속을 어긴 코드는 당신이 작성한 것과 전혀 다르게 동작할 수 있습니다. [Chapter 21](chapter_21.md)에서 unsafe를 다룰 때 이 지점을 다시 만납니다.
+
 ---
 
 ## 5.6 슬라이스(`&[T]`, `&str`): 일부만 빌리는 Fat Pointer
@@ -530,13 +576,68 @@ fn main() {
     INFO : 1
       ok : 1
  timeout : 1
-(원본 로그 길이: 49 bytes)
+(원본 로그 길이: 53 bytes)
 normalized: [0.25, 0.5, 1.0, 0.125]
 ```
 
-음미할 점이 세 가지 있습니다. 첫째, `word_count`의 반환 타입은 `HashMap<&'a str, usize>` — 키가 `String`이 아니라 `&str` 슬라이스입니다. 즉 49바이트짜리 로그에서 단어를 집계하면서 단 한 글자도 복사하지 않았습니다. 모든 키는 원본 `log`의 부분 구간을 가리키는 16바이트 fat pointer일 뿐입니다(zero-copy 집계). 둘째, 그렇기 때문에 `'a` 수명 표기가 필요합니다 — "반환된 키들은 입력 `text`가 살아있는 동안만 유효하다"는 계약을 컴파일러에 명시한 것입니다([Chapter 6](chapter_06.md)에서 본격적으로 다룹니다). 셋째, `normalize_scores`는 `&mut [f64]`로 슬라이스를 가변 대여해 새 벡터 할당 없이 제자리에서 수정합니다. 파이썬이라면 `[s / max for s in scores]`로 새 리스트를 할당하기 쉬운 지점입니다.
+음미할 점이 세 가지 있습니다. 첫째, `word_count`의 반환 타입은 `HashMap<&'a str, usize>` — 키가 `String`이 아니라 `&str` 슬라이스입니다. 즉 53바이트짜리 로그(`"ERROR disk full ERROR timeout INFO ok ERROR disk full"`는 ASCII 53글자이므로 정확히 53바이트입니다)에서 단어를 집계하면서 단 한 글자도 복사하지 않았습니다. 모든 키는 원본 `log`의 부분 구간을 가리키는 16바이트 fat pointer일 뿐입니다(zero-copy 집계). 둘째, 그렇기 때문에 `'a` 수명 표기가 필요합니다 — "반환된 키들은 입력 `text`가 살아있는 동안만 유효하다"는 계약을 컴파일러에 명시한 것입니다([Chapter 6](chapter_06.md)에서 본격적으로 다룹니다). 셋째, `normalize_scores`는 `&mut [f64]`로 슬라이스를 가변 대여해 새 벡터 할당 없이 제자리에서 수정합니다. 파이썬이라면 `[s / max for s in scores]`로 새 리스트를 할당하기 쉬운 지점입니다.
 
-> **벤치마크 맥락:** 1천만 단어짜리 로그에서 zero-copy `&str` 집계는 단어를 `String`으로 복제해 집계하는 방식 대비 힙 할당이 사실상 0에 수렴합니다(키 복사 제거). `--release` 빌드 기준, 키를 `.to_string()`으로 복제하는 변형은 수백만 번의 작은 힙 할당으로 보통 2~4배 느려집니다. 정확한 배수는 단어 길이 분포와 할당기(allocator)에 의존하므로, 자신의 데이터로 `cargo bench`(criterion 크레이트)를 돌려 확인하는 것을 권합니다. 핵심은 "복사를 빌림으로 바꾸면 할당이 사라진다"는 구조적 이점입니다.
+> **벤치마크 맥락:** 1천만 단어짜리 로그에서 zero-copy `&str` 집계는 단어를 `String`으로 복제해 집계하는 방식 대비 힙 할당이 사실상 0에 수렴합니다(키 복사 제거). `--release` 빌드 기준, 키를 `.to_string()`으로 복제하는 변형은 수백만 번의 작은 힙 할당으로 느려집니다. 정확한 배수는 단어 길이 분포와 할당기(allocator)에 의존하므로, 자신의 데이터로 `cargo bench`(criterion 크레이트)를 돌려 확인하는 것을 권합니다. 핵심은 "복사를 빌림으로 바꾸면 할당이 사라진다"는 구조적 이점입니다.
+
+### 벤치마크: 제로카피 `&str` 키 vs `String` 키 (criterion, 측정)
+
+말로 "할당이 사라진다"고 하는 것과 측정으로 보여주는 것은 다릅니다. 직접 criterion으로 재 봅시다. 두 함수는 키 타입만 다릅니다.
+
+```rust
+use std::collections::HashMap;
+
+// 제로카피: 키가 입력 text의 부분 슬라이스(&str)를 그대로 가리킨다. 힙 할당 없음.
+pub fn count_borrowed(text: &str) -> HashMap<&str, usize> {
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word).or_insert(0) += 1;
+    }
+    counts
+}
+
+// 소유: 새 키마다 String을 힙에 새로 할당(to_string)한다.
+pub fn count_owned(text: &str) -> HashMap<String, usize> {
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word.to_string()).or_insert(0) += 1;
+    }
+    counts
+}
+```
+
+`benches/wc.rs` (criterion harness):
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use word_count_bench::{count_borrowed, count_owned};
+
+fn bench(c: &mut Criterion) {
+    let log = make_log(1_000_000); // 단어 100만 개로 구성한 로그
+    let mut g = c.benchmark_group("word_count");
+    g.bench_function("borrowed_&str", |b| b.iter(|| count_borrowed(black_box(&log))));
+    g.bench_function("owned_String", |b| b.iter(|| count_owned(black_box(&log))));
+    g.finish();
+}
+
+criterion_group!(benches, bench);
+criterion_main!(benches);
+```
+
+`Cargo.toml`에 criterion을 `dev-dependencies`로 추가하고 `harness = false`로 벤치 타깃을 등록한 뒤 `cargo bench`를 돌린 실측 결과입니다(로컬: rustc 1.90.0, Apple Silicon, `--release`).
+
+```text
+word_count/borrowed_&str   time:   [12.40 ms 12.99 ms 13.26 ms]
+word_count/owned_String    time:   [25.33 ms 25.62 ms 28.08 ms]
+```
+
+같은 100만 단어 입력에서 `String` 키 버전이 약 **2배** 느립니다. 차이의 전부는 키 복제 비용입니다 — `count_owned`는 새 키를 만날 때마다 짧은 문자열 하나를 힙에 할당하고, 맵을 버릴 때 그만큼을 해제합니다. `count_borrowed`는 키가 입력 버퍼의 16바이트 fat pointer일 뿐이라 그 할당 자체가 존재하지 않습니다.
+
+> **💡 정직한 단서:** 이 2배는 "고유 단어가 적은" 로그(반복되는 토큰)에서 나온 수치입니다. 고유 토큰을 5만 종으로 늘려(`tok0`..`tok49999`) 다시 재면 17.8 ms 대 31.0 ms, 약 **1.7배**로 줄어듭니다 — 고유 키가 많아질수록 양쪽 모두 해시 삽입 비용이 커져 복제 비용의 상대적 비중이 옅어지기 때문입니다. 그래서 정직한 표현은 "복제 키는 워크로드에 따라 약 1.7~2배 느리다"입니다. 마케팅용 "10배"가 아니라, **할당을 빌림으로 바꾸면 일정한 구조적 비용이 사라진다**는 것이 핵심입니다. 단, `&str` 키는 입력 버퍼가 살아있는 동안만 유효하므로(수명, [Chapter 6](chapter_06.md)), 맵이 입력보다 오래 살아야 한다면 `String` 키가 불가피합니다 — 그때는 이 2배가 정당한 대가입니다.
 
 ---
 
@@ -698,6 +799,141 @@ fn main() {
 ```
 
 단순 교환이라면 `v.swap(i, j)`, 한 원소만 빼서 바꾸려면 `std::mem::swap`이나 `std::mem::replace`가 있습니다. **빌림 검사기와 싸우기보다, 표준 라이브러리가 이미 안전한 우회로를 마련해 두었는지 먼저 찾는 것**이 숙련된 Rustacean의 자세입니다.
+
+### 함정 ④ `String + &str`에서 좌변이 move된다 (E0382)
+
+대여를 배운 직후 가장 의외의 곳에서 발을 헛디딥니다. 바로 문자열 이어붙이기입니다. 파이썬에서 `s3 = s1 + s2`는 새 문자열을 만들 뿐 `s1`, `s2`를 멀쩡히 남겨둡니다. Rust의 `+`도 새 `String`을 만들지만, 그 과정에서 **좌변의 소유권을 가져가(move) 버립니다.**
+
+```rust
+fn main() {
+    let s1 = String::from("Hello, ");
+    let s2 = String::from("world!");
+    let s3 = s1 + &s2;   // s1이 여기서 move됨 (우변은 &str로 빌림)
+    println!("{}", s3);
+    println!("{}", s1);  // 🚨 move된 s1을 다시 사용
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `s1`
+ --> src/main.rs:6:20
+  |
+2 |     let s1 = String::from("Hello, ");
+  |         -- move occurs because `s1` has type `String`, which does not implement the `Copy` trait
+4 |     let s3 = s1 + &s2;   // s1이 여기서 move됨
+  |              -- value moved here
+...
+6 |     println!("{}", s1);  // move된 s1을 다시 사용
+  |                    ^^ value borrowed here after move
+  |
+help: consider cloning the value if the performance cost is acceptable
+  |
+4 |     let s3 = s1.clone() + &s2;
+  |                ++++++++
+```
+
+왜 좌변만 move되고 우변(`&s2`)은 빌림일까요? `+` 연산자가 호출하는 메서드의 시그니처를 보면 답이 나옵니다. `String`의 덧셈은 `impl Add<&str> for String`으로 정의되어 있고, 그 메서드는 `fn add(self, other: &str) -> String`입니다 — 좌변을 `self`로 **소유권째 받아** 그 내부 버퍼를 재사용해 결과를 만들고, 우변은 `&str`로 빌리기만 합니다. 즉 `s1 + &s2`는 사실상 `Add::add(s1, &s2)`이고, `s1`은 첫 인자 `self`로 이동합니다. 이는 비효율을 피하기 위한 의도된 설계입니다 — 좌변의 힙 버퍼를 새로 할당하지 않고 그대로 키워서 재사용하니까요. 대가로 좌변은 소비됩니다.
+
+**탈출법은 두 가지입니다.** 좌변을 정말 살려둬야 한다면 `.clone()`으로 복제본을 넘기거나(컴파일러가 친절히 제안하는 그것), 애초에 양쪽을 모두 빌리는 `format!`을 씁니다.
+
+```rust
+fn main() {
+    let s1 = String::from("Hello, ");
+    let s2 = String::from("world!");
+
+    let a = s1.clone() + &s2;   // s1을 복제해 넘김 -> 원본 s1 보존
+    let b = format!("{s1}{s2}"); // 둘 다 빌림. move 없음. 다회 결합에 가독성도 좋음
+    println!("{a} | {b} | {s1}"); // Hello, world! | Hello, world! | Hello,
+}
+```
+
+실무에서는 두세 조각을 넘기면 `+` 체인보다 `format!`(또는 `String::with_capacity` + `push_str`)이 더 읽기 쉽고, 좌변 move의 함정도 자연스럽게 피합니다. `+`는 "왼쪽 문자열을 더 이상 안 쓰고 그 버퍼를 재활용하고 싶을 때"만 쓰는 최적화 도구로 생각하세요.
+
+---
+
+## 연습문제
+
+Rustlings 스타일로, 컴파일러를 직접 마주하며 손으로 풀어 보세요. 각 문항은 가설 → 컴파일/측정으로 자기검증하는 흐름입니다. 정답 스케치는 핵심 아이디어와 함께, 스스로 확인할 수 있도록 **컴파일러 에러코드** 또는 **측정값**을 함께 적었습니다.
+
+### 문제 1 — 불변/가변 대여 규칙과 NLL
+
+다음 코드는 컴파일되지 않습니다. **한 줄도 지우지 말고**, 줄 순서만 바꿔서 컴파일되게 만드세요. 그리고 "왜 순서를 바꾸면 통과하는지"를 NLL로 설명해 보세요.
+
+```rust
+fn main() {
+    let mut data = vec![1, 2, 3];
+    let m = &mut data;     // 가변 참조
+    let r = &data;         // 불변 참조
+    m.push(4);
+    println!("{:?}", r);
+}
+```
+
+> **정답 스케치.** 현재 코드는 가변 대여 `m`이 살아있는 동안(마지막 사용은 `m.push(4)`) 불변 대여 `r`을 만들어 XOR 규칙을 어깁니다 — 그대로 컴파일하면 `error[E0502]`가 납니다. 핵심 아이디어는 **각 대여를 "마지막 사용까지"로 끝내고 시간적으로 분리**하는 것입니다(NLL). `m`을 만들고 `m.push(4)`까지 끝낸 *뒤에* `r`을 만들면, NLL이 `m`의 대여를 `push` 지점에서 종료시키므로 충돌하지 않습니다.
+>
+> ```rust
+> fn main() {
+>     let mut data = vec![1, 2, 3];
+>     let m = &mut data;     // 가변 대여 시작
+>     m.push(4);             // m의 마지막 사용 -> NLL이 여기서 가변 대여 종료
+>     let r = &data;         // 이제 불변 대여 OK
+>     println!("{:?}", r);   // [1, 2, 3, 4]
+> }
+> ```
+>
+> 자기검증: 원본은 `error[E0502]`, 재배치 후에는 컴파일·실행되어 `[1, 2, 3, 4]`를 출력합니다.
+
+### 문제 2 — 재대여(Reborrow)
+
+다음 함수는 가변 참조 `v`를 두 함수에 연달아 넘깁니다. 가변 참조는 `Copy`가 아닌데 어떻게 두 번 넘길 수 있을까요? 그리고 `consume(v); consume(v);`처럼 **소유권을 가져가는** 함수였다면 왜 막힐지 예상해 보세요.
+
+```rust
+fn touch(v: &mut Vec<i32>) { v.push(0); }
+
+fn apply_twice(v: &mut Vec<i32>) {
+    touch(v);   // (1)
+    touch(v);   // (2) — 여기서 왜 v가 아직 살아있을까?
+}
+
+fn main() {
+    let mut v = vec![];
+    apply_twice(&mut v);
+    println!("{:?}", v);
+}
+```
+
+> **정답 스케치.** `touch(v)`는 `v`를 move하지 않습니다. 컴파일러가 암묵적으로 `touch(&mut *v)`로 해석해 **기존 가변 참조에서 임시 가변 참조를 떠내는(reborrow)** 것이기 때문입니다. 호출이 끝나면 떠낸 참조가 사라지고 `v`가 다시 유일한 가변 참조로 복귀하므로, (2)에서 또 빌릴 수 있습니다. 그래서 이 코드는 컴파일되어 `[0, 0]`을 출력합니다.
+>
+> 반면 `fn consume(v: &mut Vec<i32>)`가 아니라 소유권을 받는 함수(예: `Box<Vec<i32>>`를 `self`로 받는 형태)였다면 첫 호출에서 값이 move되어 두 번째 호출은 `error[E0382]: use of moved value`가 났을 것입니다. 재대여는 **참조에 한해** 작동하는 마법입니다.
+>
+> 자기검증: 위 코드는 정상 컴파일·출력 `[0, 0]`. 재대여를 막고 싶다면 `let r = &mut v; let _ = { r };`처럼 명시적으로 move시켜 본 뒤 `r`을 다시 쓰면 `error[E0382]`를 직접 관찰할 수 있습니다.
+
+### 문제 3 — 같은 벡터의 두 원소 동시 수정
+
+벡터의 첫 원소에 마지막 원소 값을 더하고 싶습니다. 아래는 컴파일되지 않습니다. (a) 에러코드를 예상하고, (b) 인덱싱으로 두 `&mut`를 만들지 않으면서 고치세요.
+
+```rust
+fn main() {
+    let mut v = vec![10, 20, 30, 40];
+    let first = &mut v[0];
+    let last = &mut v[3];   // ?
+    *first += *last;
+    println!("{:?}", v);
+}
+```
+
+> **정답 스케치.** (a) 컴파일러는 `v[0]`과 `v[3]`이 겹치지 않음을 인덱스만으로 증명할 수 없어 "`v`를 두 번 가변 대여"로 보고 `error[E0499]: cannot borrow `v` as mutable more than once at a time`를 냅니다. (b) 표준 라이브러리의 `split_at_mut`으로 슬라이스를 **겹치지 않는 두 가변 슬라이스**로 쪼개면 컴파일러가 비중첩(disjoint)을 보장합니다.
+>
+> ```rust
+> fn main() {
+>     let mut v = vec![10, 20, 30, 40];
+>     let (left, right) = v.split_at_mut(3); // [0..3], [3..4]
+>     left[0] += right[0];
+>     println!("{:?}", v); // [50, 20, 30, 40]
+> }
+> ```
+>
+> (단순 교환이라면 `v.swap(0, 3)` 한 줄로 끝납니다.) 자기검증: 원본은 `error[E0499]`, `split_at_mut` 버전은 `[50, 20, 30, 40]`을 출력합니다.
 
 ---
 

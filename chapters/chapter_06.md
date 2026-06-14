@@ -286,9 +286,11 @@ help: add explicit lifetime `'a` to the type of `y`
 
 용어 두 개만 정리합니다. 함수의 매개변수에 있는 참조 수명을 **입력 수명(Input Lifetime)**, 반환값에 있는 참조 수명을 **출력 수명(Output Lifetime)**이라 합니다.
 
-1. **규칙 1**: 입력 참조마다 각각 독립된 수명을 부여한다. `fn f(x: &str, y: &str)`는 `fn f<'a, 'b>(x: &'a str, y: &'b str)`로 펼쳐진다.
-2. **규칙 2**: 입력 수명이 **정확히 하나**뿐이면, 그 수명을 모든 출력 참조에 부여한다.
-3. **규칙 3**: 메서드라서 입력에 `&self` 또는 `&mut self`가 있으면, `self`의 수명을 모든 출력 참조에 부여한다.
+1. **규칙 1 (입력 규칙)**: 생략된 **입력** 참조마다 각각 **서로 다른, 독립된** 수명을 부여한다. `fn f(x: &str, y: &str)`는 `fn f<'a, 'b>(x: &'a str, y: &'b str)`로 펼쳐진다. 중첩 참조도 각각 따로 세어, `&'_ &'_ T`에는 수명이 둘 배정됩니다.
+2. **규칙 2 (단일 입력 규칙)**: 입력 수명이 (규칙 1 적용 후) **정확히 하나**뿐이면, 그 수명을 모든 **출력** 참조에 복사한다. 입력 수명이 둘 이상이면 이 규칙은 작동하지 않습니다.
+3. **규칙 3 (메서드 규칙)**: 입력에 `&self` 또는 `&mut self`(즉 수신자 `self`가 참조)가 있으면, **다른 입력 수명이 몇 개든 상관없이** `self`의 수명을 모든 출력 참조에 복사한다. 그래서 메서드는 입력이 둘 이상이어도 규칙 2를 거치지 않고 곧장 `self`의 수명을 따릅니다.
+
+세 가지 모두 **`fn`과 `impl` 메서드 시그니처에만** 적용되며, 적용 순서는 1 → 2 → 3입니다. 세 규칙을 다 거쳤는데도 출력 수명이 미결로 남으면 — 6.3의 `longest`가 정확히 그 경우입니다(입력 둘, `self` 없음) — 컴파일러는 추측을 멈추고 E0106을 냅니다. 한 가지 정밀하게 짚을 점은, 규칙 2와 규칙 3은 **출력 수명에만** 손을 댄다는 것입니다. 입력 수명을 서로 묶어 주는(unify) 규칙은 없으므로, "두 입력이 같은 수명이다"는 사실이 필요하면 그것은 언제나 우리가 직접 적어 주어야 합니다.
 
 규칙 2가 가장 흔한 구원자입니다. 예를 들어 다음 함수는 입력 참조가 하나뿐이라 출력 수명이 자동으로 결정됩니다.
 
@@ -430,6 +432,32 @@ fn main() {
 }
 ```
 
+### 런타임에 계산한 값을 `'static`으로 만들기 — `OnceLock`/`LazyLock`
+
+문자열 리터럴이 아니라 **런타임에 한 번 계산한 값**을 프로그램 끝까지 살리고 싶을 때가 있습니다. 파이썬의 모듈 레벨 싱글턴(`_CONFIG = load_config()`)이나 `functools.lru_cache`로 캐싱하는 전역 테이블이 떠오르는 자리입니다. 예전 Rust 코드는 `lazy_static!`/`once_cell::sync::Lazy` 같은 외부 크레이트로 이를 했지만, 그 기능은 표준 라이브러리에 흡수되었습니다 — **`std::sync::OnceLock`**(Rust 1.70+, 한 번만 쓰는 셀)과 **`std::sync::LazyLock`**(Rust 1.80+, 첫 접근 시 클로저로 지연 초기화)입니다. 새 코드에서는 외부 크레이트 대신 이 둘을 쓰세요.
+
+```rust
+use std::sync::OnceLock;
+
+// 런타임에 한 번 초기화되어 프로그램 끝까지 사는 전역 → 안전하게 &'static을 얻는 정석.
+static CONFIG: OnceLock<String> = OnceLock::new();
+
+fn config() -> &'static str {
+    // get_or_init은 최초 호출에서만 클로저를 실행하고, 이후엔 저장된 값을 반환한다.
+    CONFIG.get_or_init(|| {
+        // 비싼 초기화(파일/환경 변수 읽기 등)를 단 한 번만 수행
+        String::from("loaded-once")
+    })
+}
+
+fn main() {
+    println!("{}", config()); // loaded-once (초기화 발생)
+    println!("{}", config()); // loaded-once (재사용, 초기화 안 함)
+}
+```
+
+`CONFIG`는 `static`이라 프로그램 전체 수명 동안 살아있고, 그 안의 `String`도 마찬가지이므로 `get_or_init`이 돌려주는 `&String`은 정직하게 `&'static`입니다. 진짜로 임의의 소유 값을 영구히 `'static`으로 누수시켜야 한다면 `Box::leak`(`Box::leak(s.into_boxed_str()) -> &'static str`)도 있지만, 이름 그대로 메모리를 의도적으로 누수시켜 되돌릴 수 없으니 초기화 1회성 데이터에만 쓰세요. 어느 쪽이든 공통점은 동일합니다 — `'static`은 "데이터가 실제로 프로그램 끝까지 산다"는 **사실을 먼저 만든 뒤**에야 얻어지는 것이지, 표기만으로 부여되지 않습니다.
+
 > 🚨 **흔한 오해 1: `&'static`을 붙이면 값이 더 오래 산다?** 아닙니다. `'static`은 다른 모든 수명 표기와 똑같이 "이미 그러한 사실"을 기술할 뿐, 값을 연장하지 않습니다. 지역 변수에 `&'static`을 억지로 붙이면 컴파일러는 "이건 `'static`이 아니다"라며 거부합니다. 실제로 함수가 지역 변수의 참조를 `&'static`으로 반환하려는 코드를 보세요.
 
 ```rust
@@ -492,11 +520,123 @@ where
 }
 ```
 
-실무에서 `T: 'a`를 직접 적는 일은 흔치 않습니다(컴파일러가 대개 추론합니다). 하지만 제네릭 컬렉션이나 콜백을 다룰 때, 컴파일러가 "`T may not live long enough`"라고 불평하면 십중팔구 `where T: 'a` 한 줄이 해법입니다. 에러 메시지가 직접 그렇게 제안해 주니, 메시지를 신뢰하세요.
+실무에서 `T: 'a`를 직접 적는 일은 흔치 않습니다(컴파일러가 대개 추론합니다). 하지만 제네릭 컬렉션이나 콜백을 다룰 때, 컴파일러가 "`T may not live long enough`"라고 불평하면 십중팔구 `where T: 'a` 한 줄이 해법입니다. 에러 메시지가 직접 그렇게 제안해 주니, 메시지를 신뢰하세요. (참고로 이 진단은 결합되는 타입에 따라 에러 코드 `error[E0309]`로 나타나기도 합니다.)
 
 ---
 
-## 6.8 실전 예제 (Hands-on): 제로카피 설정 파서
+## 6.8 변성(Variance) 입문 — 파이썬엔 없는 "수명끼리의 호환성"
+
+수명을 어느 정도 다루다 보면, 의식하지 못한 채 매일 의존하던 규칙 하나가 수면 위로 떠오릅니다. 다음 코드는 아무 표기 없이 컴파일됩니다.
+
+```rust
+fn print_it(s: &str) {        // 임의의(짧은) 수명을 기대하는 함수
+    println!("{s}");
+}
+
+fn main() {
+    let static_str: &'static str = "hello"; // 가장 긴 수명
+    print_it(static_str);                    // 'static을 더 짧은 수명 자리에 넘긴다 → OK
+}
+```
+
+`print_it`은 "아무 수명 `&str`"을 받는데, 우리는 거기에 가장 긴 `&'static str`을 넘겼습니다. 직관적으로 당연해 보이지만, 엄밀히 말하면 타입이 다릅니다 — `&'static str`과 `&'short str`은 서로 다른 타입입니다. 그런데도 긴 쪽을 짧은 쪽 자리에 넣는 것이 허용됩니다. 이 "수명 사이의 대입 가능 방향"을 규정하는 것이 **변성(Variance)**입니다. 파이썬에는 이런 개념이 없습니다(굳이 비유하면 `mypy`의 공변/반변 제네릭 `TypeVar(covariant=True)`가 가장 가깝습니다). Rust에서는 컴파일러가 타입마다 변성을 자동으로 정하며, 우리가 직접 표기하지는 않지만 **수명 에러를 해독할 때 반드시 알아야 하는 배경 규칙**입니다.
+
+변성에는 세 종류가 있습니다.
+
+- **공변(Covariant)**: `'long`이 `'short`보다 길 때, `&'long T`를 `&'short T`가 필요한 자리에 쓸 수 있다. 즉 수명을 **줄이는 방향으로** 호환된다. `&'a T`(불변 참조)와 `Box<T>`, `Vec<T>`가 `'a`/`T`에 대해 공변입니다. 위 예제가 동작한 이유가 바로 이것 — 긴 `'static`을 짧은 수명 자리에 흘려보낼 수 있습니다.
+- **불변(Invariant)**: 수명을 늘리지도 줄이지도 못한다. 정확히 같은 수명만 받는다. **`&'a mut T`(가변 참조)는 가리키는 대상 `T`에 대해 불변**이고, `Cell<T>`·`RefCell<T>`도 `T`에 불변입니다. 가변 접근이 끼면 "양방향"이 되어, 한쪽으로만 줄이는 것이 곧바로 불건전(unsound)해지기 때문입니다.
+- **반변(Contravariant)**: 공변의 반대. 수명을 **늘리는 방향으로** 호환된다. 실무에서 직접 마주칠 일은 드물지만, 함수 타입의 **인자 위치**가 반변입니다 — `fn(&'static str)`을 요구하는 자리에 `fn(&'short str)`(더 짧은 수명도 받아 주는, 더 너그러운 함수)을 넘길 수 있습니다.
+
+가변 참조가 왜 불변이어야 하는지, 즉 "공변을 허용하면 무슨 재앙이 나는지"를 컴파일러가 막는 실제 사례로 봅시다.
+
+```rust
+// dest가 가리키는 참조를, src로 덮어쓴다.
+fn evil<'a>(dest: &mut &'a str, src: &'a str) {
+    *dest = src;
+}
+
+fn main() {
+    let mut long_lived: &'static str = "static";
+    {
+        let local = String::from("temporary");
+        // &mut &'static str 을 &mut &'a str 자리에 넘기려는 시도.
+        // &mut가 공변이었다면 'static을 'a(짧은 수명)으로 "줄여" 통과시켰을 것이다.
+        evil(&mut long_lived, &local);
+    } // 🚨 local이 여기서 죽는다
+    println!("{long_lived}"); // 만약 위가 통과했다면 long_lived는 죽은 local을 가리킨다!
+}
+```
+
+```text
+error[E0597]: `local` does not live long enough
+  --> variance_invariant.rs:10:31
+   |
+ 6 |     let mut long_lived: &'static str = "static";
+   |                         ------------ type annotation requires that `local` is borrowed for `'static`
+ 8 |         let local = String::from("temporary");
+   |             ----- binding `local` declared here
+10 |         evil(&mut long_lived, &local);
+   |                               ^^^^^^ borrowed value does not live long enough
+11 |     } // local이 여기서 죽는다
+   |     - `local` dropped here while still borrowed
+```
+
+에러 메시지의 두 번째 줄이 정확히 변성의 작동을 폭로합니다 — **"type annotation requires that `local` is borrowed for `'static`"**. `&mut &'static str`이 불변이기 때문에 컴파일러는 `'a`를 `'static`으로 **줄이지 못하고**, 거꾸로 `local`이 `'static`만큼 살아야 한다고 요구합니다. 당연히 지역 변수 `local`은 그럴 수 없으니 E0597로 거부됩니다. 만약 `&mut`가 (불변 참조처럼) 공변이었다면 이 코드가 통과해 `long_lived`가 해제된 `local`을 가리키는 use-after-free가 됐을 것입니다. 즉 **변성은 수명 시스템이 건전성을 유지하는 마지막 빗장**입니다.
+
+> 💡 **실무 요점**: 변성을 직접 표기할 일은 없습니다(`unsafe`로 `PhantomData`를 다루지 않는 한). 다만 "분명 더 긴 수명을 넘겼는데 왜 거부되지?"라는 당혹스러운 에러의 절반은 `&mut`/`Cell`/`RefCell`의 **불변성** 때문입니다. 불변 참조(`&T`)는 너그럽고, 가변 참조(`&mut T`)는 까다롭다 — 이 한 문장만 기억하면 대부분의 변성 관련 에러를 해독할 수 있습니다.
+
+---
+
+## 6.9 수명은 기계어에 흔적이 0 — MIR로 직접 확인하기
+
+6.4의 Under the Hood에서 "수명은 타입 검사가 끝나면 증발한다"고 단언했습니다. 이 말은 믿어 달라는 주장이 아니라 **눈으로 확인할 수 있는 사실**입니다. Rust 컴파일러의 중간 표현(MIR, Mid-level IR)을 뽑아 보면, 우리가 적은 `'a`가 어디로 사라지는지 직접 볼 수 있습니다.
+
+6.3의 `longest`를 그대로 컴파일하되 MIR을 출력해 봅니다.
+
+```bash
+rustc --emit=mir longest.rs
+```
+
+소스의 시그니처와, 컴파일러가 빌림 검사를 마친 뒤 생성한 MIR의 시그니처를 나란히 놓아 보세요.
+
+```text
+# 우리가 적은 소스
+fn longest<'a>(x: &'a str, y: &'a str) -> &'a str { ... }
+
+# 빌림 검사 직후의 MIR (lifetimes erased)
+fn longest(_1: &str, _2: &str) -> &str {
+    debug x => _1;
+    debug y => _2;
+    let mut _0: &str;
+    ...
+}
+```
+
+`<'a>`도, `&'a`의 `'a`도 **흔적 없이 사라졌습니다.** 명시적으로 적은 수명 매개변수는 MIR 단계에서 이미 없어졌고, 남은 것은 그냥 `&str`뿐입니다. 구조체 수명도 마찬가지입니다 — `ImportantExcerpt<'a>`(6.5)는 MIR에서 이름이 지워진 익명 영역 `ImportantExcerpt<'_>`로 나타나, 우리가 붙인 이름 `'a`가 검사 이후엔 아무 정보도 나르지 않음을 보여 줍니다.
+
+> **Under the Hood: 수명은 "빌림 검사 통과용 증명"이고, 그 증명은 코드 생성 전에 폐기된다**
+>
+> rustc의 파이프라인은 대략 `소스 → AST → HIR → (타입·트레이트 해석) → MIR → 빌림 검사(borrowck) → 단일형화(Monomorphization) → LLVM IR → 기계어` 순입니다. 수명과 영역(Region) 정보는 **MIR 위에서 빌림 검사가 끝나는 순간까지만** 필요합니다. 빌림 검사가 "모든 참조가 자기가 가리키는 데이터보다 오래 살지 않는다"를 증명하고 나면, 그 증명을 떠받치던 수명 정보는 더 이상 쓸모가 없어 폐기됩니다. 그래서 LLVM에 넘어가는 코드에는 수명의 흔적이 0이고, 당연히 생성된 기계어에도 0입니다. 이를 확인하는 또 다른 방법: 같은 함수를 수명을 **생략한 버전**과 **명시한 버전**으로 각각 `rustc -O --emit=asm`해 어셈블리를 비교하면, 두 출력은 **바이트 단위로 완전히 동일**합니다(실측 확인). 즉 `'a`를 적든 안 적든, 컴파일러가 보는 프로그램도 같고 CPU가 실행하는 명령도 같습니다. 이것이 수명이 무비용 추상화(Zero-cost Abstraction)인 이유의 가장 직접적인 증거입니다 — C의 포인터에 "수명 태그"라는 런타임 필드가 없는 것과 정확히 같은 의미에서, Rust의 참조에도 그런 것은 없습니다. 차이는 단 하나, Rust는 그 안전성을 **컴파일 타임에 증명하도록 강제**한다는 것뿐입니다.
+
+### 수명 관련 에러코드 치트시트
+
+수명을 다루다 만나는 에러는 종류가 의외로 적고, 코드만 보면 원인이 거의 특정됩니다. 실무에서 마주치는 핵심 에러를 한 표로 정리합니다(모두 이 장에서 실제로 재현한 것입니다).
+
+| 에러 코드 | 한 줄 의미 | 전형적 원인 | 처방 |
+|---|---|---|---|
+| `E0106` | missing lifetime specifier | 입력 참조 2개 이상인 함수가 참조를 반환(생략 규칙 미적용) | `<'a>`를 선언하고 입력·출력에 명시(6.3) |
+| `E0621` | explicit lifetime required | 시그니처의 `'a`와 본문이 반환하는 참조의 출처가 불일치 | 반환될 수 있는 인자에 같은 `'a`를 부여 |
+| `E0515` | cannot return reference to local variable | 함수 지역 변수의 참조/슬라이스를 반환 | 소유 값(`String`/`Vec`)을 반환하거나 입력 참조를 반환 |
+| `E0597` | does not live long enough | 참조가 가리키는 원본이 참조보다 먼저 드롭됨 | 원본의 스코프를 늘리거나 참조 사용을 앞당김(NLL) |
+| `E0505` | cannot move out of \`x\` because it is borrowed | 빌린 상태에서 같은 값을 move (self-ref 시도 단골) | 빌림이 끝난 뒤 move, 또는 인덱스/`clone`으로 재설계(6.5) |
+| `E0309` | the parameter type \`T\` may not live long enough | 제네릭 `T`가 품을 수 있는 참조에 대한 outlives 바운드 누락 | `where T: 'a` 추가(6.7) |
+| (코드 없음) `lifetime may not live long enough` | 영역 포함 관계 위반(변성·바운드 불일치) | 출력 수명이 입력보다 길거나, `&mut`의 불변성 충돌(6.8) | 명명 수명 도입 또는 가변/불변 참조 선택 재검토 |
+
+> 💡 에러 코드는 `rustc --explain E0106`으로 공식 설명과 최소 재현 코드를 즉시 볼 수 있습니다. 최신 rustc는 일부 수명 진단을 숫자 코드 없는 `lifetime may not live long enough`로 통합 출력하기도 하니, 코드가 안 보여도 메시지의 "must outlive" / "requires that ... is borrowed for ..." 문구를 단서로 읽으세요.
+
+---
+
+## 6.10 실전 예제 (Hands-on): 제로카피 설정 파서
 
 지금까지의 모든 개념 — 구조체에 담는 참조, 규칙 3 생략, 출력 수명이 입력에 묶이는 계약 — 이 한데 모이는 현실적인 예제를 만들어 봅시다. 파이썬으로는 다음처럼 작성할 `key=value` 설정 파서입니다.
 
@@ -650,7 +790,7 @@ ratio: 2.4x
 
 ---
 
-## 6.9 Best Practices & 흔한 함정
+## 6.11 Best Practices & 흔한 함정
 
 ### Best Practices 체크리스트
 
@@ -683,7 +823,7 @@ fn parse_owned(input: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-// ✅ 6.8처럼 수명으로 묶어 슬라이스를 반환 — 할당 0회.
+// ✅ 6.10처럼 수명으로 묶어 슬라이스를 반환 — 할당 0회.
 //    소유가 정말 필요한 경계(예: 입력 버퍼가 곧 사라지는 API 경계)에서만 clone하라.
 ```
 
@@ -702,7 +842,87 @@ struct Doc {
 }
 ```
 
-**함정 4 — `&'static`을 "오래 살리는 주문"으로 오해하기.** 6.6에서 본 두 가지 오해입니다. 컴파일러가 `'static`을 요구한다고 해서 변수에 `'static`을 붙이면 해결되는 게 아닙니다 — 소유 값을 넘기거나, 데이터를 실제로 `'static`하게(예: `Box::leak`, `lazy_static`/`once_cell`) 만들어야 합니다.
+**함정 4 — `&'static`을 "오래 살리는 주문"으로 오해하기.** 6.6에서 본 두 가지 오해입니다. 컴파일러가 `'static`을 요구한다고 해서 변수에 `'static`을 붙이면 해결되는 게 아닙니다 — 소유 값을 넘기거나, 데이터를 실제로 `'static`하게(예: `Box::leak`, 표준 라이브러리의 `std::sync::OnceLock`/`std::sync::LazyLock`) 만들어야 합니다. 과거에는 `once_cell`·`lazy_static` 같은 외부 크레이트를 썼지만, 1.70/1.80부터 그 기능이 표준 라이브러리로 들어왔으니 새 코드에서는 표준 타입을 쓰세요(6.6의 코드 참고).
+
+---
+
+## 연습문제
+
+손으로 풀어 보세요. Rustlings 스타일로, 먼저 머릿속(또는 종이)으로 답한 뒤 실제 `rustc`로 확인하는 것이 핵심입니다. 각 문항 아래 **정답 스케치**에는 핵심 아이디어와 함께, 틀렸을 때 컴파일러가 내뱉는 **자기검증용 에러 코드** 또는 측정값을 적어 두었습니다.
+
+**문제 1 (수명 표기).** 다음 함수는 두 정수 슬라이스 중 더 긴 쪽의 "앞 절반"을 반환합니다. 그대로는 컴파일되지 않습니다. 어떤 에러가 나며, 시그니처를 어떻게 고쳐야 할까요?
+
+```rust
+fn longer_half(a: &[i32], b: &[i32]) -> &[i32] {
+    if a.len() > b.len() { &a[..a.len() / 2] } else { &b[..b.len() / 2] }
+}
+```
+
+> **정답 스케치.** 입력 참조가 둘이라 생략 규칙 2가 적용되지 않고, 반환 참조가 둘 중 어느 입력에 묶이는지 시그니처가 말하지 않습니다 → `error[E0106]: missing lifetime specifier`. 반환값이 두 입력 어느 쪽에서든 나올 수 있으므로 셋을 같은 `'a`로 묶습니다:
+> ```rust
+> fn longer_half<'a>(a: &'a [i32], b: &'a [i32]) -> &'a [i32] { /* 동일 */ }
+> ```
+> 자기검증: 고치기 전 `rustc`는 `E0106`, 고친 뒤엔 통과. (만약 한 입력에만 묶을 수 있는 의미였다면 6.3의 `first_word`처럼 `'a`/`'b`로 나누는 것이 더 정밀합니다.)
+
+**문제 2 (생략 규칙).** 다음 두 함수/메서드는 수명을 한 글자도 적지 않았는데도 컴파일됩니다. 컴파일러가 각각 어떤 시그니처로 "탈설탕(desugar)"하는지, 그리고 적용된 생략 규칙 번호를 적으세요.
+
+```rust
+fn trim_prefix(s: &str) -> &str { s.trim_start() }
+
+struct Buf { data: String }
+impl Buf {
+    fn head(&self) -> &str { &self.data[..1] }
+}
+```
+
+> **정답 스케치.**
+> - `trim_prefix`: 입력 참조가 하나뿐 → **규칙 1**로 `'a` 하나 배정, **규칙 2**로 그 `'a`를 출력에 복사. 펼치면 `fn trim_prefix<'a>(s: &'a str) -> &'a str`.
+> - `head`: 입력에 `&self`가 있으므로 **규칙 3**이 `self`의 수명을 출력에 부여. 펼치면 `fn head<'a>(&'a self) -> &'a str`. (입력이 하나뿐이라 규칙 2로도 같은 결과지만, `&self`가 있으면 규칙 3이 우선합니다.)
+> 자기검증: 손으로 적은 명시 시그니처로 바꿔도 동일하게 컴파일되면 정답입니다. 반대로 입력을 둘로 늘리고(`fn trim_prefix(s: &str, _t: &str) -> &str`) `&self`가 없게 만들면 곧바로 `E0106`이 떠, 규칙 2가 "단일 입력"에서만 작동함을 확인할 수 있습니다.
+
+**문제 3 (구조체 수명).** 입력 문자열을 빌려 첫 단어를 토큰으로 돌려주는 제로카피 렉서를 완성하세요. 빈칸(`/* ? */`)에 들어갈 수명 표기를 채우고, 왜 구조체에는 생략이 안 되는지 한 줄로 설명하세요.
+
+```rust
+#[derive(Debug)]
+struct Token/* ? */ { kind: &str, text: &str }
+
+struct Lexer/* ? */ { src: &str }
+
+impl/* ? */ Lexer/* ? */ {
+    fn new(src: &str) -> Self { Lexer { src } }
+    fn first_word(&self) -> Token/* ? */ {
+        let w = self.src.split_whitespace().next().unwrap_or("");
+        Token { kind: "word", text: w }
+    }
+}
+```
+
+> **정답 스케치.** 구조체 필드가 참조를 담으면 반드시 수명 매개변수가 필요합니다(생략 규칙은 `fn`/메서드 시그니처에만 적용되고, 구조체에는 입력/출력 흐름이 없어 적용 근거가 없습니다 — 6.4 말미). 채운 결과:
+> ```rust
+> struct Token<'a> { kind: &'a str, text: &'a str }
+> struct Lexer<'a> { src: &'a str }
+> impl<'a> Lexer<'a> {
+>     fn new(src: &'a str) -> Self { Lexer { src } }
+>     fn first_word(&self) -> Token<'a> { /* 동일 */ }
+> }
+> ```
+> `first_word`의 반환 `Token<'a>`는 `self.src`의 `'a`를 따릅니다. 자기검증: `Token`에서 `<'a>`를 빼면 `error[E0106]: missing lifetime specifier`(필드 `&str`마다 한 번씩) — 구조체에는 생략이 없다는 증거입니다.
+
+**문제 4 (`'static`).** 다음 함수는 스레드로 보낼 값을 받기 위해 `T: 'static` 바운드를 겁니다. (a) `spawn_like(String::from("hi"))`는 통과하는데 (b) 지역 변수 참조 `spawn_like(&local)`은 거부되는 이유를 설명하고, 거부 시의 에러 코드를 적으세요. 그리고 런타임에 계산한 값을 `&'static str`로 안전하게 얻는 표준 라이브러리 방법 하나를 쓰세요.
+
+```rust
+fn spawn_like<T: Send + 'static>(_v: T) {}
+```
+
+> **정답 스케치.** `T: 'static`은 "`T`가 `'static`보다 짧은 빌린 참조를 품지 않는다"는 뜻입니다(6.6의 오해 2). (a) `String`은 데이터를 **소유**하므로 빌린 참조가 없어 자동으로 `'static`을 만족 → 통과. (b) `&local`은 지역 변수 `local`의 수명에 묶이므로 `'static`이 아님 → 거부, `error[E0597]: \`local\` does not live long enough`(메시지에 "argument requires that \`local\` is borrowed for \`'static\`"이 함께 뜹니다). 런타임 계산 값을 `'static`으로 얻는 정석은 `std::sync::OnceLock`입니다(과거의 `once_cell`/`lazy_static`을 대체):
+> ```rust
+> use std::sync::OnceLock;
+> static GREETING: OnceLock<String> = OnceLock::new();
+> fn greeting() -> &'static str {
+>     GREETING.get_or_init(|| String::from("hello, world")).as_str()
+> }
+> ```
+> 자기검증: (b)는 `E0597`, `OnceLock` 버전은 통과하며 두 번째 호출부터 초기화 클로저가 실행되지 않습니다.
 
 ---
 
@@ -718,4 +938,6 @@ struct Doc {
 - https://doc.rust-lang.org/rust-by-example/scope/lifetime.html
 - https://doc.rust-lang.org/reference/lifetime-elision.html
 - https://doc.rust-lang.org/nomicon/lifetimes.html
+- https://doc.rust-lang.org/nomicon/subtyping.html
+- https://doc.rust-lang.org/std/sync/struct.OnceLock.html
 - https://doc.rust-lang.org/error_codes/E0106.html

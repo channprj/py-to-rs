@@ -86,11 +86,41 @@ $ rustup component add clippy rustfmt rust-src   # 컴포넌트 추가
 
 | 채널 | 주기 | 성격 | 파이썬에 비유하면 |
 | :--- | :--- | :--- | :--- |
-| **stable** | 6주마다 | 프로덕션용. 모든 안정화된 기능. | CPython 정식 릴리스 (3.12.x) |
+| **stable** | 6주마다 | 프로덕션용. 모든 안정화된 기능. | CPython 정식 릴리스 (3.13.6) |
 | **beta** | 6주마다 | 다음 stable의 후보. 회귀 테스트용. | 릴리스 후보(rc) |
 | **nightly** | 매일 | 실험적 기능(unstable feature) 사용 가능. | `__future__` 임포트 + 빌드 미리보기 |
 
 Rust는 6주마다 한 칸씩 밀려 올라가는 **열차 모델(train model)**을 씁니다. 오늘의 nightly가 6주 뒤 beta가 되고, 다시 6주 뒤 stable이 됩니다. `#![feature(...)]` 같은 실험적 기능은 nightly에서만 켤 수 있으며, 안정화되기 전까지는 stable 빌드에서 컴파일조차 되지 않습니다. 파이썬에서 `from __future__ import annotations`로 미래 문법을 미리 끌어쓰던 경험과 정확히 같은 개념이되, **컴파일러가 강제**한다는 점이 다릅니다.
+
+#### 컴파일러 에러 시연: stable에서 nightly 기능을 쓰면
+
+말로만 "stable에선 안 된다"고 하면 와닿지 않으니, 실제로 막히는 장면을 보겠습니다. Rust에는 `box` 패턴(`Box`를 패턴 매칭으로 바로 풀어내는 문법)이 있는데, 이 기능은 십수 년째 nightly에 머물러 있고 stable에서는 컴파일되지 않습니다. 무심코 이 문법을 쓰면 어떻게 되는지 봅시다.
+
+```rust
+fn main() {
+    let boxed: Box<i32> = Box::new(42);
+    let box value = boxed;   // 🚨 컴파일 에러! box 패턴은 아직 nightly 전용
+    println!("{}", value);
+}
+```
+
+stable 1.96.0에서 `rustc`를 돌리면 정확히 이렇게 거부합니다.
+
+```text
+error[E0658]: box pattern syntax is experimental
+ --> src/main.rs:3:9
+  |
+3 |     let box value = boxed;
+  |         ^^^^^^^^^
+  |
+  = note: see issue #29641 <https://github.com/rust-lang/rust/issues/29641> for more information
+
+error: aborting due to 1 previous error
+
+For more information about this error, try `rustc --explain E0658`.
+```
+
+`error[E0658]`은 "안정화되지 않은(unstable) 기능을 stable 채널에서 사용했다"는 뜻의, Rust 입문자가 만나는 가장 흔한 에러 코드 중 하나입니다. note에 적힌 issue 번호(여기선 #29641)는 그 기능의 안정화 추적 이슈이고, 거기서 "왜 아직 안정화 안 됐는지"의 논의 맥락을 볼 수 있습니다. 해결책은 둘 중 하나입니다. (1) `rustup default nightly`로 nightly 채널에 들어가 파일 맨 위에 `#![feature(box_patterns)]`를 선언하거나, (2) stable에서 동작하는 대안(`let value = *boxed;`)을 쓰는 것입니다. 프로덕션 코드라면 거의 항상 (2)를 택합니다. 참고로 stable에서 `#![feature(...)]` 자체를 적으면 또 다른 에러 `error[E0554]: #![feature] may not be used on the stable release channel`가 뜹니다. 즉 E0658(기능을 씀)과 E0554(기능 게이트를 켬)는 같은 벽의 양면입니다.
 
 ### 툴체인 핀(Pin): `rust-toolchain.toml`
 
@@ -429,6 +459,47 @@ strip = true           # 심볼 테이블 제거 → 바이너리 추가 축소
 
 빌드 전 과정을 관찰하고 싶다면 `cargo build -v`로 `rustc`에 넘기는 실제 플래그를, `cargo build --timings`로 크레이트별 컴파일 시간 HTML 리포트를 볼 수 있습니다.
 
+### 증분 컴파일과 `.fingerprint` — 두 번째 빌드는 왜 빠른가
+
+"Rust는 컴파일이 느리다"는 말을 들어보셨을 겁니다. 절반만 맞습니다. **처음 한 번**은 느립니다. 하지만 두 번째부터는 이야기가 완전히 달라집니다. 실제로 측정해 봅시다. criterion 의존성을 가진 작은 프로젝트를 깨끗한 상태에서 빌드하면 의존성 트리(criterion, plotters, regex, serde 등 수십 개 크레이트)를 전부 컴파일하느라 14초가 걸립니다. 그런데 아무것도 바꾸지 않고 다시 빌드하면:
+
+```text
+$ cargo build --benches      # 첫 빌드: 의존성 전체 컴파일
+   Compiling criterion v0.5.1
+   ...
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 14.05s
+
+$ cargo build --benches      # 두 번째 빌드: 변경 없음
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.05s
+```
+
+14.05초가 0.05초로 줄었습니다. 약 280배입니다. `rustc`가 아무 일도 하지 않았기 때문입니다. 그 판단의 근거가 `target/`에 숨어 있는 **`.fingerprint`** 디렉터리입니다.
+
+> **Under the Hood — `.fingerprint`가 캐시를 무효화하는 방식**
+>
+> Cargo는 컴파일 단위(crate × profile × target)마다 `target/<profile>/.fingerprint/<crate>-<hash>/` 아래에 작은 메타데이터 파일들을 남깁니다. 그 안의 JSON을 직접 열어보면 이렇게 생겼습니다(들여쓰기는 편의상 추가).
+>
+> ```json
+> {
+>   "rustc": 9783247635632824192,    // 컴파일러 버전+커밋 해시
+>   "features": "[]",                // 활성화된 feature 집합
+>   "target": 12368643011565581116, // 빌드 타깃 트리플
+>   "profile": 6675295047989516842, // opt-level, debuginfo, lto 등 프로파일 설정
+>   "path": 4942398508502643691,    // 소스 경로
+>   "deps": [],                     // 의존 크레이트들의 fingerprint
+>   "rustflags": [],                // RUSTFLAGS
+>   "config": 2069994364910194474   // 관련 cargo 설정
+> }
+> ```
+>
+> 빌드를 호출할 때마다 Cargo는 이 입력들을 다시 해싱한 새 fingerprint와 저장된 값을 비교합니다. **하나라도 다르면** 그 크레이트만 다시 컴파일합니다. 여기에 더해, 각 컴파일 단위에는 그것이 의존하는 모든 소스 파일 목록(`dep-info`)과 mtime이 기록되어 있어, 소스의 수정 시각이 바뀌면 재컴파일 대상이 됩니다.
+>
+> 그래서 `rustc` 버전을 올리거나(`rustc` 해시 변경), `Cargo.toml`에서 feature를 켜거나(`features` 변경), `--release`로 바꾸거나(`profile` 변경), `RUSTFLAGS`를 건드리면(`rustflags` 변경) **그 변경의 영향을 받는 부분만** 다시 빌드됩니다. 의존성은 그대로이므로 두 번째 빌드가 0.05초로 끝나는 것입니다. 파이썬의 `.pyc` 캐시(`__pycache__`)가 소스 mtime만 보고 단순 무효화하는 것과 달리, Cargo의 fingerprint는 **컴파일러 버전·feature·플래그·의존성 그래프 전체**를 입력으로 잡아 정밀하게 무효화합니다.
+>
+> 이것이 `target/`을 절대 `.gitignore` 밖에 두면 안 되는 이유이기도 합니다. 이 디렉터리는 단순한 산출물 더미가 아니라 머신·컴파일러 버전에 강하게 결합된 **재현 불가능한 빌드 캐시**입니다. 다른 머신에 그대로 복사해도 fingerprint가 어긋나 대부분 무효화됩니다. 반면 `cargo clean` 후 다시 빌드하면 동일한 결과가 나옵니다 — 재현성은 `Cargo.lock`과 소스가 보장하지, `target/`이 보장하는 게 아닙니다.
+
+증분 컴파일은 자기 크레이트 **내부**에서도 작동합니다. `target/debug/incremental/`에는 함수 단위로 쪼갠 중간 산출물이 캐시되어, 한 함수만 고치면 그 함수가 속한 코드 생성 단위만 다시 만듭니다. 이 때문에 편집-저장-`cargo check` 루프가 첫 빌드 이후로는 거의 즉각적으로 느껴집니다.
+
 ---
 
 ## 2.8 타깃 아키텍처, 크로스 컴파일, 그리고 단일 바이너리 배포
@@ -502,6 +573,31 @@ $ ldd target/x86_64-unknown-linux-musl/release/my_rust_app
 
 파이썬의 PyPI에 대응하는 것이 Rust의 **crates.io**입니다. `cargo add reqwest`는 PyPI의 `pip install`처럼 동작하되, 자동으로 `Cargo.toml`을 수정하고 최신 호환 버전을 캐럿 표기로 넣어줍니다. 둘의 가장 큰 문화적 차이는 **품질의 상향 평준화**입니다. 거의 모든 인기 크레이트가 `cargo doc`으로 생성된 표준 형식의 문서를 docs.rs에 자동 게시하므로, 라이브러리마다 문서 스타일이 제각각인 파이썬과 달리 탐색 경험이 일관됩니다.
 
+> **Under the Hood — sparse 레지스트리 프로토콜과 "왜 빨라졌는가"**
+>
+> Cargo가 의존성을 해석하려면 먼저 "crates.io에 어떤 크레이트의 어떤 버전이 있는가"라는 **인덱스(index)**를 알아야 합니다. 2023년 이전(Cargo 1.70 미만)에는 이 인덱스가 하나의 거대한 **git 저장소**였습니다. `cargo`는 이 저장소를 통째로 `~/.cargo/registry/index/github.com-<hash>/`에 클론하고, 새 크레이트가 나올 때마다 `git fetch`로 받아왔습니다. crates.io에 16만 개가 넘는 크레이트가 쌓이면서 이 git 인덱스는 수백 MB로 불어났고, 깨끗한 머신에서 첫 `cargo build`가 인덱스 클론에만 수십 초~수 분을 잡아먹는 악명 높은 병목이 되었습니다.
+>
+> 1.70부터 기본값이 된 **sparse 프로토콜**은 이 구조를 버렸습니다. 이제 인덱스는 git이 아니라 평범한 HTTP 정적 파일 서버(`https://index.crates.io/`)이고, Cargo는 **자기 프로젝트가 실제로 의존하는 크레이트의 메타데이터만** 개별 HTTPS GET으로 가져옵니다. 로컬 인덱스 디렉터리 이름이 바뀐 것으로 이 전환을 직접 확인할 수 있습니다.
+>
+> ```text
+> # 과거(git 프로토콜)
+> ~/.cargo/registry/index/github.com-1ecc6299db9ec823/
+>
+> # 현재(sparse 프로토콜, 1.70+)
+> ~/.cargo/registry/index/index.crates.io-1949cf8c6b5b557f/
+> #                       └ "index.crates.io" 접두사가 sparse임을 가리킴
+> ```
+>
+> 그 안의 `config.json`은 단 네 줄입니다.
+>
+> ```json
+> { "dl": "https://static.crates.io/crates", "api": "https://crates.io" }
+> ```
+>
+> Cargo는 `serde`가 필요하면 `index.crates.io/se/rd/serde` 같은 경로로 그 크레이트의 버전 목록 한 줄만 받아오고, 전체 인덱스를 복제하지 않습니다. 받은 메타데이터는 `.cache/`에 크레이트별 파일로 저장되어 다음 빌드에서 재사용됩니다.
+>
+> **이것이 정확히 uv가 파이썬에서 빠른 이유와 같은 원리입니다.** 전통적인 `pip`는 의존성을 풀 때 후보 버전마다 sdist/휠 메타데이터를 따로 내려받아 느렸습니다. uv는 PyPI의 JSON API와 HTTP Range 요청으로 **필요한 메타데이터만** 골라 받고, 그것을 전역 캐시에 저장해 재사용합니다. "전체를 복제하지 말고, 필요한 조각만 HTTP로 가져와 캐시하라"는 동일한 설계 철학이, Rust에서는 sparse 레지스트리로, 파이썬에서는 uv로 각각 구현된 셈입니다. 거대 모노레포의 CI에서 sparse 전환 후 인덱스 갱신 시간이 분 단위에서 초 단위로 떨어진 것은 흔한 경험입니다.
+
 핵심 명령어를 파이썬 대응과 함께 정리합니다.
 
 | 역할 | Python 생태계 | Rust (`cargo`) | 비고 |
@@ -536,7 +632,34 @@ $ cargo audit                     # Cargo.lock의 알려진 보안 취약점 스
 $ cargo tree -i serde             # serde를 누가 끌어오는지 역추적
 ```
 
-`cargo-edit`는 `cargo add`/`cargo rm`을 제공했는데, 인기가 많아 `cargo add`는 이제 Cargo 본체에 흡수되었습니다. 생태계의 좋은 아이디어가 표준으로 승격되는 흐름이 파이썬과 다른 점입니다.
+`cargo-edit`는 `cargo add`/`cargo rm`을 제공했는데, 인기가 많아 Cargo 본체에 흡수되었습니다. `cargo add`는 1.62부터, `cargo remove`는 1.66부터 외부 크레이트 설치 없이 바로 쓸 수 있습니다(둘 다 `cargo add --help`/`cargo remove --help`로 확인됩니다). 다시 말해 의존성 추가/제거를 위해 더는 `cargo install cargo-edit`를 할 필요가 없습니다. 생태계의 좋은 아이디어가 표준으로 승격되는 흐름이 파이썬과 다른 점입니다.
+
+### 흔한 함정: `cargo install`로 라이브러리를 설치하려는 시도
+
+`pip install requests`가 손에 익은 파이썬 개발자가 Rust에서 가장 먼저 저지르는 실수가 이것입니다. `serde`를 쓰고 싶어서 `cargo install serde`를 칩니다. 그러면 이런 에러가 돌아옵니다.
+
+```text
+$ cargo install serde
+    Updating crates.io index
+error: there is nothing to install in `serde v1.0.228`, because it has no binaries
+`cargo install` is only for installing programs, and can't be used with libraries.
+To use a library crate, add it as a dependency to a Cargo project with `cargo add`.
+```
+
+핵심은 `pip install`과 `cargo install`이 **이름만 비슷할 뿐 전혀 다른 도구**라는 점입니다. `pip install`은 라이브러리든 CLI 도구든 가리지 않고 현재 환경에 설치합니다. 반면 `cargo install`은 오직 **실행 파일(바이너리 크레이트)**을 `~/.cargo/bin/`에 전역 설치하는, 파이썬으로 치면 `pipx install`에 해당하는 명령입니다. `ripgrep`, `cargo-nextest`, `cargo-audit` 같은 개발자 도구를 까는 용도이지, 프로젝트 의존성을 추가하는 용도가 아닙니다.
+
+라이브러리를 프로젝트에 추가하는 올바른 방법은 `cargo add`입니다.
+
+```bash
+# 🚨 틀림: serde는 라이브러리라 설치할 바이너리가 없다
+$ cargo install serde
+
+# ✅ 맞음: 현재 프로젝트의 의존성으로 추가 (Cargo.toml 자동 수정)
+$ cargo add serde --features derive
+$ cargo add serde_json
+```
+
+이 구분이 처음에는 불편하게 느껴지지만, 사실 파이썬의 고질병 하나를 구조적으로 막아줍니다. 파이썬에서 CLI 도구(`black`, `httpie`)를 `pip install`로 깔면 프로젝트 의존성과 전역 도구가 같은 `site-packages`에서 뒤엉켜 버전 충돌을 일으킵니다(그래서 `pipx`가 등장했습니다). Cargo는 이 둘을 애초에 다른 명령(`cargo add` vs `cargo install`)으로 분리해, 도구와 의존성이 섞일 여지를 없앴습니다.
 
 ### Clippy — "가르치는 린터"
 
@@ -603,12 +726,103 @@ fn main() {
 
 | 실행 방식 | 상대 속도(개략) | 비고 |
 | :--- | :--- | :--- |
-| CPython 3.11 | 1× (기준) | 인터프리터 + `PyObject` 박싱 |
+| CPython 3.13.6 | 1× (기준) | 인터프리터 + `PyObject` 박싱 |
 | Rust `cargo run` (Debug) | 3~8× 빠름 | `opt-level=0`, 최적화 거의 없음 |
 | Rust `--release` (`opt-level=3`) | 30~100× 빠름 | LLVM 인라이닝·벡터화 |
 | Rust `--release` + LTO + `codegen-units=1` | 위에서 추가로 5~20% | 크레이트 경계 최적화 |
 
 여기서 두 가지 교훈이 나옵니다. 첫째, **Debug 빌드만으로도 파이썬보다 빠를 때가 많지만**, 그것을 Rust의 진짜 실력으로 오해하면 안 됩니다. Release와 Debug 사이에 한 자릿수 배수의 차이가 흔합니다. 둘째, 마케팅에서 흔히 보는 "Rust는 파이썬보다 100배 빠르다" 같은 문구는 **특정 워크로드의 Release 빌드 수치**이며, I/O 바운드나 이미 C로 구현된 라이브러리(`numpy`)를 호출하는 코드에서는 격차가 훨씬 줄어듭니다. 우리는 항상 측정 맥락(입력 크기, 빌드 모드)을 명시하는 정직한 비교를 추구합니다. 동시성·이터레이터·PyO3 챕터에서 이 수치들을 워크로드별로 더 정밀하게 다시 측정할 것입니다.
+
+### criterion으로 정직하게 측정하기 — 미니 벤치 하니스
+
+위 표의 "개략" 배수가 미덥지 않다면, 직접 재면 됩니다. 파이썬에서 `pytest-benchmark`나 `timeit`을 쓰듯, Rust에는 통계적으로 엄밀하게 측정해 주는 사실상의 표준 크레이트 **criterion**이 있습니다. `cargo bench`의 기본 하니스(`#[bench]`)는 아직 nightly 전용이라, 실무에서는 stable에서 동작하는 criterion을 씁니다. 워밍업, 다회 샘플링, 이상치 탐지, 회귀 비교까지 자동으로 해줍니다.
+
+소수를 세는 함수 하나로 미니 하니스를 만들어 봅시다. 측정 대상은 라이브러리로 분리합니다(벤치가 `pub` 함수를 호출해야 하므로).
+
+```toml
+# Cargo.toml
+[package]
+name = "prime_bench"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]            # 벤치는 테스트처럼 dev에서만 빌드됨
+criterion = "0.5"
+
+[[bench]]
+name = "primes"
+harness = false               # 기본 하니스 끄고 criterion이 main을 제공
+```
+
+```rust
+// src/lib.rs — 측정 대상
+/// 시행 나눗셈으로 n 미만의 소수 개수를 센다.
+pub fn count_primes(n: u64) -> u64 {
+    let mut count = 0;
+    for candidate in 2..n {
+        let mut is_prime = true;
+        let mut d = 2;
+        while d * d <= candidate {
+            if candidate % d == 0 {
+                is_prime = false;
+                break;
+            }
+            d += 1;
+        }
+        if is_prime {
+            count += 1;
+        }
+    }
+    count
+}
+```
+
+```rust
+// benches/primes.rs — criterion 하니스
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use prime_bench::count_primes;
+
+fn bench_count_primes(c: &mut Criterion) {
+    c.bench_function("count_primes 100_000", |b| {
+        // black_box: 입력을 "컴파일러가 미리 계산할 수 없는 값"으로 위장.
+        // 이게 없으면 LLVM이 결과를 상수 폴딩해 0ns가 측정될 수 있다.
+        b.iter(|| count_primes(black_box(100_000)))
+    });
+}
+
+criterion_group!(benches, bench_count_primes);
+criterion_main!(benches);
+```
+
+`cargo bench`를 돌리면 criterion이 워밍업 후 100개 샘플을 수집해 신뢰구간과 함께 보고합니다.
+
+```text
+$ cargo bench
+count_primes 100_000    time:   [2.1039 ms 2.2047 ms 2.3649 ms]
+Found 8 outliers among 100 measurements (8.00%)
+```
+
+가운데 값이 중앙 추정치(약 2.2 ms)이고, 양옆은 신뢰구간 하한·상한입니다. 같은 알고리즘을 파이썬으로 그대로 옮겨 측정하면(본문 측정 환경: Python 3.13.6) 약 99.6 ms가 나옵니다.
+
+```python
+# 동일 알고리즘, 동일 입력 (n = 100,000)
+def count_primes(n: int) -> int:
+    count = 0
+    for candidate in range(2, n):
+        is_prime = True
+        d = 2
+        while d * d <= candidate:
+            if candidate % d == 0:
+                is_prime = False
+                break
+            d += 1
+        if is_prime:
+            count += 1
+    return count
+# 측정: 약 99.6 ms (5회 best-of)
+```
+
+99.6 ms / 2.2 ms ≈ **45배**. 마케팅 슬로건의 "100배"가 아니라, 이 워크로드·이 입력·Release 빌드 기준의 **측정된 45배**입니다. `black_box`를 빼면 LLVM이 결과를 상수로 접어버려 0에 가까운 수치가 나오는데, 그 숫자로 "1000배 빠르다"고 주장하는 것이 바로 우리가 피하려는 거짓 비교입니다. criterion은 이런 함정을 막아주는 도구이자, 정직한 수치를 강제하는 규율입니다.
 
 ---
 
@@ -736,6 +950,48 @@ $ ls -lh target/x86_64-unknown-linux-musl/release/json_echo
 
 **8) `cargo build`와 `cargo check`를 구분하지 않는 실수.**
 타입·빌림 오류만 빠르게 확인하고 싶을 땐 기계어를 생성하지 않는 `cargo check`가 훨씬 빠릅니다. 편집-저장 루프에서는 `cargo check`(또는 `cargo clippy`)를, 실제 실행할 때만 `cargo build`/`cargo run`을 쓰세요.
+
+---
+
+## 2.13 연습문제
+
+Rustlings 스타일로, 손으로 직접 풀어 보세요. 각 문항 아래 '정답 스케치'를 접어두고, 먼저 머리로(또는 실제 셸로) 답을 만든 뒤 펼쳐서 대조하면 학습 효과가 큽니다. 자기검증용으로 **컴파일러 에러 코드** 또는 **측정값**을 함께 적었습니다.
+
+**문제 1 — 증분 컴파일.** criterion 의존성을 가진 프로젝트를 처음 `cargo build`하면 14초가 걸렸는데, 곧바로 다시 `cargo build`하면 0.05초로 끝났습니다. Cargo는 무엇을 근거로 "다시 컴파일할 필요가 없다"고 판단할까요? 또, 단지 `rustc` 버전만 올렸을 때(소스·`Cargo.toml`은 그대로) 두 번째 빌드는 빨라질까요, 느려질까요?
+
+> **정답 스케치:** 근거는 `target/<profile>/.fingerprint/` 안의 fingerprint입니다. Cargo는 컴파일 단위마다 `rustc` 버전 해시, 활성 feature, 타깃, 프로파일, 소스 경로, 의존성 fingerprint, `RUSTFLAGS`, 관련 설정을 해싱해 저장하고, 다음 빌드에서 이 값들을 다시 계산해 비교합니다. 하나라도 다르면 그 단위만 재컴파일합니다. `rustc` 버전을 올리면 fingerprint JSON의 `"rustc"` 필드가 바뀌므로 **모든 크레이트가 무효화**되어 다시 14초대로 느려집니다(컴파일러가 바뀌면 산출물의 ABI 호환을 보장할 수 없으니 당연합니다). 자기검증: `cat target/debug/.fingerprint/<crate>-<hash>/*.json`으로 `"rustc"` 필드의 정수 해시를 직접 확인하세요.
+
+**문제 2 — sparse 레지스트리.** 깨끗한 CI 러너에서 `cargo build`가 의존성 인덱스를 받는 데 예전(1.70 미만)에는 수십 초가 걸렸지만 지금은 훨씬 빠릅니다. 무엇이 바뀌었나요? 그리고 파이썬의 uv가 빠른 이유와 어떤 공통점이 있나요? 로컬에서 이 전환을 어떻게 눈으로 확인할 수 있을까요?
+
+> **정답 스케치:** 인덱스 프로토콜이 git(전체 인덱스 저장소 클론)에서 **sparse**(필요한 크레이트의 메타데이터만 HTTPS GET)로 바뀌었습니다. 1.70부터 기본값입니다. uv도 PyPI 전체를 받지 않고 필요한 패키지 메타데이터만 HTTP로 골라 받아 캐시하는 동일한 "부분 페치 + 캐시" 철학을 씁니다. 자기검증: `ls ~/.cargo/registry/index/`를 실행해 디렉터리 이름이 옛날 `github.com-...`이 아니라 `index.crates.io-...`로 시작하면 sparse 프로토콜입니다. 그 안의 `config.json`에는 `"dl"`/`"api"` 두 키만 있습니다.
+
+**문제 3 — `cargo install`의 함정.** 동료가 "프로젝트에 `serde`를 쓰려고 `cargo install serde`를 했는데 에러가 나요"라고 합니다. 무슨 에러가 나며, 올바른 명령은 무엇인가요? `cargo install`과 `cargo add`는 각각 파이썬의 무엇에 대응하나요?
+
+> **정답 스케치:** `serde`는 라이브러리(바이너리 없음)라 `cargo install`이 거부합니다. 에러 메시지: `there is nothing to install in \`serde v1.0.228\`, because it has no binaries` / `cargo install is only for installing programs, and can't be used with libraries.` 올바른 명령은 `cargo add serde --features derive`입니다. 대응: `cargo install`은 전역 CLI 도구 설치이므로 파이썬의 `pipx install`에, `cargo add`는 프로젝트 의존성 추가이므로 `poetry add`/`pip install`(프로젝트 맥락)에 해당합니다.
+
+**문제 4 — nightly 기능과 컴파일러 에러.** stable 1.96.0에서 아래 코드를 컴파일하면 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
+
+```rust
+fn main() {
+    let boxed: Box<i32> = Box::new(42);
+    let box value = boxed;
+    println!("{}", value);
+}
+```
+
+> **정답 스케치:** `error[E0658]: box pattern syntax is experimental`. box 패턴은 nightly 전용이기 때문입니다. 해결책 (1) nightly 채널 + 파일 상단에 `#![feature(box_patterns)]` 선언, (2) stable에서 그냥 역참조: `let value = *boxed;`. 프로덕션은 (2). 참고로 stable에서 `#![feature(...)]`를 적으면 별개의 에러 `error[E0554]`가 뜹니다. 자기검증: `rustc --explain E0658`로 의미를 확인하세요.
+
+**문제 5 — criterion과 정직한 측정.** 아래 벤치에서 `black_box`를 제거하면 측정 시간이 비현실적으로 0에 가까워질 수 있습니다. 왜 그럴까요? `count_primes(100_000)`을 Release로 측정하면 약 2.2 ms, 동일 알고리즘의 파이썬은 약 99.6 ms입니다. 배수는 얼마이며, 이 수치를 "100배"라고 부르면 왜 부정직한가요?
+
+```rust
+b.iter(|| count_primes(black_box(100_000)))
+```
+
+> **정답 스케치:** `black_box` 없이 입력이 컴파일 타임 상수면, LLVM이 `count_primes(100_000)`의 결과를 **상수 폴딩**해 루프 자체를 제거할 수 있습니다. 그러면 호출이 사라져 ~0ns가 측정됩니다. `black_box`는 값을 "컴파일러가 미리 알 수 없는 것"으로 위장해 실제 계산을 강제합니다. 배수는 99.6 / 2.2 ≈ **45배**입니다. "100배"는 이 워크로드·이 입력·Release 기준의 측정값(45배)을 부풀린 것이며, 측정 맥락(입력 크기, 빌드 모드) 없이 단일 숫자를 인용하는 것이 부정직의 핵심입니다.
+
+**문제 6 — `cargo add`/`cargo remove`의 출처.** 의존성을 추가/제거하려고 예전 블로그에서 본 `cargo install cargo-edit`를 먼저 깔아야 할까요? 각 명령이 언제 Cargo 본체에 들어왔는지 떠올려 보세요.
+
+> **정답 스케치:** 아닙니다. `cargo add`(1.62+)와 `cargo remove`(1.66+) 모두 Cargo 본체에 흡수되어, 별도 설치 없이 바로 씁니다. 한때 `cargo-edit` 크레이트가 제공하던 기능이 표준으로 승격된 사례입니다. 자기검증: `cargo remove --help`가 "command not found" 없이 사용법을 출력하면 본체에 내장된 것입니다.
 
 ---
 

@@ -219,6 +219,37 @@ fn main() {
 >
 > 반면 CPython의 `a + b`는 항상 `PyNumber_Add()`라는 범용 C 함수를 거치고, 그 안에서 매번 타입 슬롯을 조회합니다. 타입이 `i32`로 고정되어 있다는 사실을 알아도 그것을 활용할 방법이 런타임에는 없습니다.
 
+> **💡 Under the Hood: i32 덧셈의 실제 기계어 — 직접 눈으로 확인하기**
+>
+> "단 하나의 CPU 명령어로 컴파일된다"는 말을 믿지 말고 직접 봅시다. 의사 코드가 아니라 진짜 어셈블리입니다. 함수가 인라이닝되어 사라지지 않도록 `#[inline(never)]`를 붙이고 어셈블리를 추출합니다.
+>
+> ```rust
+> #[inline(never)]
+> #[no_mangle]
+> pub fn add_two_i32(a: i32, b: i32) -> i32 {
+>     a + b
+> }
+> ```
+>
+> ```bash
+> # 로컬에서 어셈블리 추출 (rustc 내장 기능, 별도 설치 불필요)
+> $ rustc -O --edition 2021 --emit asm add.rs
+> # 또는 Compiler Explorer(godbolt.org)에 붙여넣고 우측 패널 확인
+> # 또는 cargo-asm 크레이트: cargo install cargo-show-asm && cargo asm add_two_i32
+> ```
+>
+> 추출된 `add_two_i32`의 본문은 (Apple Silicon / AArch64 기준) 정확히 두 줄입니다.
+>
+> ```text
+> _add_two_i32:
+>     add  w0, w1, w0   ; 두 32비트 레지스터를 더해 결과 레지스터에 쓴다
+>     ret               ; 호출자에게 반환
+> ```
+>
+> x86-64에서는 `lea eax, [rdi + rsi]` 또는 `add edi, esi` 한 줄로 나옵니다(아키텍처만 다를 뿐 본질은 동일 — **단일 산술 명령어**). 프롤로그/에필로그조차 없이 덧셈 한 번과 `ret`이 전부입니다. 타입 조회도, 슬롯 디스패치도, 힙 할당도 없습니다.
+>
+> 이제 CPython의 `a + b`와 비교하면 격차가 직관적으로 와닿습니다. CPython 바이트코드 `BINARY_OP`는 `PyNumber_Add()`를 호출하고, 그 함수는 `a`의 타입 객체에서 `nb_add` 슬롯 포인터를 읽어 간접 호출(indirect call)을 한 뒤, 그 안에서 결과를 담을 새 `PyObject`를 힙에 할당합니다. 어림잡아 **수십~수백 개의 기계어 명령어**가 우리가 원한 단 하나의 `add`를 감싸고 있는 셈입니다. 이 비율(1 대 수십~수백)이 곧 1.1.3에서 본 ~100배 격차의 미시적 근원입니다.
+
 ### 1.2.2 GIL 파괴자: 소유권(Ownership)과 Fearless Concurrency
 
 Rust에는 GIL이 없습니다. 그렇다고 `PyObject`처럼 객체마다 refcount를 세지도 않습니다. 대신 **소유권(Ownership)**이라는 규칙으로 메모리를 컴파일 타임에 관리합니다(4장에서 깊이 다룹니다).
@@ -375,7 +406,8 @@ $ ./bench
 |--------|------------------|------|
 | 정수 1개 | `int` 객체 = **28바이트** | `i64` = **8바이트** (스택, 헤더 0) |
 | 정수 1000개 | `list` 컨테이너 8856B + 객체 28KB ≈ **36KB** | `Vec<i64>` = 핸들 24B + 데이터 **8KB** |
-| 문자열 핸들 | `str` 헤더 49B+ (49 + len) | `String` = **24바이트** 핸들 (ptr·len·cap) |
+| 빈 문자열 | `str('')` = **41바이트** (Python 3.13.6 측정) | `String::new()` = **24바이트** 핸들 (cap 0, 힙 할당 없음) |
+| 문자열 핸들 | `str(n글자 ASCII)` = **41 + n바이트** ('hello' = 46) | `String` = **24바이트** 핸들 (ptr·len·cap) + 힙 데이터 |
 | 문자열 슬라이스 | (해당 개념 없음) | `&str` = **16바이트** fat pointer (ptr·len) |
 
 `std::mem::size_of`로 직접 확인할 수 있습니다.
@@ -388,6 +420,15 @@ fn main() {
     println!("{}", std::mem::size_of::<Option<&i64>>());  // 8   (니치 최적화!)
 }
 ```
+
+> 🚨 **측정 주의 (Python 문자열 크기는 버전마다 다르다)**: 인터넷에 떠도는 "Python `str`는 49바이트"라는 수치는 Python 3.12 이전 기준입니다. Python 3.13.6에서 `sys.getsizeof('')`를 직접 재면 **41바이트**, ASCII 한 글자가 추가될 때마다 **+1바이트**입니다(`sys.getsizeof('hello')` = 46). 책의 모든 수치를 의심하고 직접 측정하는 습관을 들이십시오 — 이것이 1.3 전체를 관통하는 태도입니다.
+>
+> ```python
+> import sys
+> sys.getsizeof('')       # 41
+> sys.getsizeof('a')      # 42
+> sys.getsizeof('hello')  # 46  (41 + 5)
+> ```
 
 > **💡 Under the Hood: `Option<&T>`가 8바이트인 마법 (니치 최적화)**
 >
@@ -414,6 +455,21 @@ fn main() {
 **인프라 레벨.** Dropbox는 동기화 엔진의 스토리지 코어를 Rust로 작성했습니다(수십만 대 규모에서 메모리·정확성). Cloudflare는 Nginx를 대체하는 프록시 `Pingora`를 Rust로 만들어 하루 수조 건의 요청을 처리하며 CPU·메모리를 크게 절감했습니다. AWS는 Lambda·Fargate를 떠받치는 마이크로VM 모니터 `Firecracker`를 Rust로 작성했습니다 — 멀티테넌트 격리에서 메모리 안전성은 타협 불가입니다. Discord는 앞서 본 대로 GC 스파이크를 피하려 Go에서 Rust로 갈아탔습니다.
 
 공통분모가 보이시나요? **메모리 안전성이 보안·정확성과 직결되거나, 일관된 저(低)레이턴시·고처리량이 비즈니스 가치인 곳.** 그리고 결정적으로, 이들 대부분은 **전체를 Rust로 만든 게 아니라 핫스팟만 Rust로 만들었습니다.** Pydantic은 검증 엔진만, Cryptography는 파서만. 이것이 Python 개발자에게 Rust가 주는 가장 현실적인 가치입니다.
+
+### 1.4.1 당신이 매일 쓰는 Rust 도구 ↔ 이 책의 챕터
+
+여기서 한 가지 사실이 위안이 됩니다 — 여러분은 이미 Rust로 만든 도구를 매일 쓰면서, 그 도구가 *왜* 그렇게 빠른지를 설명하는 개념을 이미 절반은 알고 있습니다. 아래 표는 여러분이 손에 쥔 Rust 바이너리가 어떤 Rust 개념을 활용하는지, 그리고 그 개념을 이 책 어디에서 배우는지 연결합니다. 즉, 추상적인 "Rust를 배워라"가 아니라 "**당신이 매일 실행하는 `uv`의 그 속도가 어디서 오는지**"를 따라가는 학습 지도입니다.
+
+| 매일 쓰는 도구 | 그 속도/안전성의 원천이 되는 Rust 개념 | 이 책의 챕터 |
+|----------------|-----------------------------------------|--------------|
+| **`ruff`** (린터/포매터) | 소유권 기반 제로카피(Zero-copy) 파싱 — 소스 문자열을 복사 않고 `&str` 슬라이스로 AST를 가리킴 | 5장(참조/대여), 14장(`String`/`&str`) |
+| **`uv`** (패키지 관리자) | `rayon`을 통한 두려움 없는 병렬 의존성 해결(GIL 없음), 결정론적 메모리 해제 | 16장(멀티스레딩), 17장(`Arc`/`Mutex`) |
+| **`pydantic-core`** (검증 엔진) | `enum`+`Result`로 표현한 검증 결과, `PyO3`로 Python에 노출 | 10장(`enum`), 12장(`Result`), 22장(`PyO3`) |
+| **`polars`** (DataFrame) | 단일형화된 제네릭 컬럼 연산, 이터레이터 지연 평가, `Send`/`Sync` 멀티스레드 | 7장(`struct`), 15장(이터레이터), 16·17장(동시성) |
+| **`cryptography`** (ASN.1 파서) | 경계 검사가 강제되는 슬라이스, `unsafe` 최소화로 버퍼 오버플로 차단 | 5장(대여), 21장(FFI/`unsafe`) |
+| **`tokio`** 기반 서비스(예: Pingora) | `async`/`await` 무비용 상태 기계, GC 없는 결정론적 레이턴시 | 18장(비동기) |
+
+이 표를 챕터별 진도와 함께 다시 보면, 추상적이던 개념들이 "아, `ruff`가 소스를 한 번도 복사 안 하니까 빠른 거구나" 하고 손에 잡히기 시작합니다.
 
 ---
 
@@ -480,6 +536,131 @@ help: consider cloning the value if the performance cost is acceptable
 **함정 3 — `.clone()` 남발로 빌림 검사기 회피하기.** 컴파일 에러를 빨리 없애려 모든 곳에 `.clone()`을 박으면 컴파일은 되지만, 매번 힙 데이터를 통째로 복사해 Python보다 느려질 수 있습니다. `.clone()`은 "여기서 진짜 복사가 일어난다"는 명시적 신호입니다 — 무심코 쓰지 마십시오.
 
 **함정 4 — "Rust로 짜면 무조건 빠르다"는 미신.** I/O 바운드 코드, 또는 이미 NumPy/Polars가 네이티브로 처리하는 코드를 Rust로 옮겨도 빨라지지 않습니다. 병목이 CPU 인터프리터 루프일 때만 그 100배가 나옵니다.
+
+**함정 5 — 인덱스/`range`에 `i64`를 쓰려는 습관.** Python에서는 `lst[i]`의 `i`가 그냥 정수면 됩니다(음수면 뒤에서부터). Rust에서 슬라이스/`Vec` 인덱싱과 `0..n` 범위는 **부호 없는 `usize`(플랫폼 포인터 크기, 64비트에서 8바이트)**를 요구합니다. `i64`로 인덱싱하면 컴파일러가 막습니다.
+
+```rust
+fn main() {
+    let v = vec![10, 20, 30];
+    let i: i64 = 1;
+    println!("{}", v[i]);   // 🚨 컴파일 에러!
+}
+```
+
+```text
+error[E0277]: the type `[{integer}]` cannot be indexed by `i64`
+ --> src/main.rs:4:22
+  |
+4 |     println!("{}", v[i]);
+  |                      ^ slice indices are of type `usize` or ranges of `usize`
+  |
+  = help: the trait `SliceIndex<[{integer}]>` is not implemented for `i64`
+```
+
+해법은 인덱스 변수를 처음부터 `usize`로 두거나(`let i: usize = 1;`), 정말 부호 있는 계산이 필요하면 `v[i as usize]`로 명시 변환하는 것입니다. 단, `as` 캐스팅은 음수를 거대한 양수로 바꿔버려(`-1 as usize` = 18446744073709551615) 패닉을 부르므로, 음수 가능성이 있으면 `usize::try_from(i)`로 안전하게 변환해 `Result`로 받으십시오(12장).
+
+**함정 6 — 정수 오버플로는 "조용히 감기지 않는다"(디버그 빌드 한정).** Python `int`는 임의 정밀도라 오버플로 자체가 없습니다. C 출신이라면 "오버플로는 그냥 감긴다(wraparound)"고 알 것입니다. Rust는 둘 다 아닙니다 — **빌드 모드에 따라 동작이 다릅니다.**
+
+```rust
+use std::hint::black_box;
+fn main() {
+    let x: i32 = black_box(2_000_000_000);
+    let y = x + x;   // 4e9 는 i32 최댓값(2_147_483_647)을 넘는다
+    println!("{y}");
+}
+```
+
+```bash
+# 디버그 빌드: 패닉으로 즉시 중단 (버그를 숨기지 않는다)
+$ rustc --edition 2021 overflow.rs && ./overflow
+thread 'main' panicked at overflow.rs:4:13:
+attempt to add with overflow
+
+# 릴리스 빌드: 2의 보수 wrapping (성능 우선, 검사 생략)
+$ rustc -O --edition 2021 overflow.rs && ./overflow
+-294967296
+```
+
+이 차이가 위험한 이유: 디버그에서 멀쩡히 패닉으로 잡히던 버그가 `--release` 배포 후 조용한 정수 오염으로 둔갑할 수 있습니다. 의도가 "감기는 동작"이라면 `wrapping_add`, "넘치면 알고 싶다"면 `checked_add`(→ `Option`), "포화시키고 싶다"면 `saturating_add`를 **명시적으로** 쓰십시오. 의도를 타입과 메서드 이름으로 드러내는 것 — 이것이 Rust의 일관된 철학입니다.
+
+---
+
+## 1.7 연습문제
+
+읽기만 해서는 멘탈 모델이 손에 붙지 않습니다. 아래 세 문제는 Rustlings 스타일로, **종이와 머릿속으로 먼저 답을 적은 뒤** 직접 컴파일·측정해 자기 검증하도록 설계했습니다. 각 문항 직후의 '정답 스케치'는 핵심 아이디어와 함께, 여러분이 맞았는지 확인할 **컴파일러 에러 코드** 또는 **측정값**을 제공합니다.
+
+### 문제 ① — 니치 최적화로 size 예측하기
+
+다음 각 타입의 `std::mem::size_of`가 몇 바이트일지 **먼저 손으로 예측**한 뒤, 코드를 컴파일해 맞춰 보십시오. 핵심 질문: 어떤 것이 니치 최적화(Niche Optimization)로 태그 바이트를 절약하고, 어떤 것이 못 하는가?
+
+```rust
+use std::mem::size_of;
+fn main() {
+    println!("{}", size_of::<Option<&i64>>());     // ?
+    println!("{}", size_of::<Option<bool>>());     // ?
+    println!("{}", size_of::<Option<char>>());     // ?
+    println!("{}", size_of::<Option<Box<i64>>>()); // ?
+    println!("{}", size_of::<Option<i64>>());      // ?  (이건 왜 다를까?)
+}
+```
+
+> **정답 스케치**
+> 측정값(rustc 1.96, 64비트): `Option<&i64>` = **8**, `Option<bool>` = **1**, `Option<char>` = **4**, `Option<Box<i64>>` = **8**, `Option<i64>` = **16**.
+> 핵심 아이디어: 참조(`&i64`)·`Box`는 **절대 null이 아니라는 불변식**이 있어 주소 0을 `None` 표식으로 재활용 → 태그 0바이트. `bool`은 `0`/`1`만 쓰므로 나머지 254개 비트패턴 중 하나를 `None`으로 → 1바이트 유지. `char`는 유효 범위(0x0~0x10FFFF) 밖 값을 `None`으로 → 4바이트 유지. 반면 `i64`는 **모든 비트패턴이 유효한 값**이라 니치가 없습니다. 그래서 별도 태그(+정렬 패딩)가 필요해 8 + 8 = **16바이트**로 두 배가 됩니다. "값이 가질 수 없는 구멍(niche)이 있는가?"가 판단 기준입니다.
+
+### 문제 ② — E0382를 세 가지 방법으로 고치기
+
+아래 코드는 컴파일되지 않습니다. **에러 코드를 먼저 맞히고**, 이어서 의미가 서로 다른 **세 가지 해법**으로 각각 고쳐 보십시오. 세 해법의 런타임 비용과 의미 차이를 한 줄로 설명할 수 있어야 합니다.
+
+```rust
+fn main() {
+    let s = String::from("hello");
+    let s2 = s;          // ← 무슨 일이 일어나는가?
+    println!("{s} {s2}");
+}
+```
+
+> **정답 스케치**
+> 자기검증용 에러: `error[E0382]: borrow of moved value: \`s\``. `String`은 `Copy`가 아니므로 `let s2 = s`에서 소유권이 이동(move)하고 `s`는 무효화됩니다.
+> 세 가지 해법(모두 컴파일 성공 확인):
+> 1. **clone** — `let s2 = s.clone();` : 힙 데이터를 통째로 복사. 두 개의 독립 소유권. 비용 = 힙 할당 + memcpy(여기선 5바이트, 작지만 큰 문자열이면 비쌈).
+> 2. **참조(대여)** — `let s2 = &s;` : `s`가 소유를 유지하고 `s2`는 읽기 참조(16바이트 포인터). 복사 0, 가장 저렴. 다만 `s2`의 수명이 `s`를 넘을 수 없음(5·6장).
+> 3. **move 후 반환** — 함수에 `s`를 넘겨 소유권을 이동시키고 `fn f(s: String) -> String { ...; s }`로 다시 돌려받기. 소유권을 옮겼다가 회수하는 패턴.
+> 핵심: 컴파일러의 `help: consider cloning`은 가장 쉬운(1번) 길을 알려줄 뿐, **대부분의 경우 정답은 2번(빌려 쓰기)**입니다. "정말 독립 복사본이 필요한가, 아니면 잠깐 보기만 하면 되는가?"를 물으십시오.
+
+### 문제 ③ — `black_box`가 없으면 왜 루프가 0.000초인가
+
+다음 두 벤치마크 코드의 차이는 `black_box`뿐입니다. 각각 `rustc -O`로 빌드해 실행하면 출력 시간이 어떻게 다를지 예측하고, **왜 그런지 설명**해 보십시오.
+
+```rust
+// (A) black_box 없음
+use std::time::Instant;
+fn main() {
+    let n: u64 = 50_000_000;
+    let start = Instant::now();
+    let mut total: u128 = 0;
+    for i in 0..n as u128 { total += i * i; }
+    println!("{:.6}s (total={})", start.elapsed().as_secs_f64(), total);
+}
+```
+
+```rust
+// (B) black_box 있음
+use std::time::Instant;
+use std::hint::black_box;
+fn main() {
+    let n: u64 = 50_000_000;
+    let start = Instant::now();
+    let mut total: u128 = 0;
+    for i in 0..n as u128 { total += black_box(i) * black_box(i); }
+    println!("{:.6}s (total={})", start.elapsed().as_secs_f64(), total);
+}
+```
+
+> **정답 스케치**
+> 측정값: (A) ≈ **0.000000s**, (B) ≈ **0.03s**. 같은 머신에서 1000배 이상 차이가 "나는 것처럼 보입니다".
+> 핵심 아이디어: (A)에서 `total`의 최종 값은 입력에만 의존하는 **순수 함수**이고 컴파일러는 그것을 압니다. LLVM은 (1) 닫힌 형태 공식으로 합을 즉시 계산하거나(상수 폴딩), (2) `total`이 어디에도 영향을 주지 않으면 루프 전체를 **죽은 코드 제거(Dead Code Elimination)**로 삭제합니다. 결과적으로 런타임에 루프는 *존재하지 않습니다*. (B)의 `black_box`는 "이 값은 외부에서 관찰될 수 있으니 미리 계산하지 마라"는 **최적화 방벽(optimization barrier)**이라, 컴파일러는 실제로 5천만 번 곱셈·덧셈을 실행하는 코드를 남깁니다.
+> 교훈: `black_box`(또는 `criterion` 크레이트) 없이 측정한 마이크로벤치마크의 "X천 배 빠름"은 거의 항상 **루프가 통째로 지워진** 가짜입니다. 1.3의 모든 수치는 이 방벽을 켜고 측정한 값입니다.
 
 ---
 
