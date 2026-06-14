@@ -709,3 +709,13 @@ struct Doc {
 수명은 C/C++ 출신 개발자조차 낯설어하는 Rust 고유의 개념이지만, 그 정체는 의외로 단순합니다 — **이미 존재하는 참조들의 생존 관계를 컴파일러에게 설명하는 언어**일 뿐, 새로운 무언가를 만들거나 값을 더 오래 살리는 마법이 아닙니다. 생략 규칙 덕에 대부분의 코드에서는 보이지도 않고, 정작 직접 적게 되는 곳은 구조체에 참조를 담는 제한된 상황뿐입니다. 그리고 그 수명 검사는 타입 체킹이 끝나는 순간 증발하여 런타임 비용이 정확히 0인, 무비용 추상화의 결정판입니다.
 
 이로써 우리는 Rust가 메모리를 지배하는 세 기둥 — 소유권(Chapter 4), 대여(Chapter 5), 수명(Chapter 6) — 을 모두 손에 넣었습니다. 이 단단한 기반 위에서, 다음 장(Part 3, Chapter 7)부터는 파이썬의 풍부한 객체 지향 문법이 Rust에서 어떻게 탈바꿈하는지 살펴봅니다. 첫 주제는 데이터를 담는 그릇 — `dataclass`와 `Pydantic`을 대체하는 **Struct와 데이터 모델링**입니다. 방금 배운 구조체 수명이 그곳에서 `serde`의 제로카피 역직렬화로 다시 등장하니, 기대해도 좋습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch10-03-lifetime-syntax.html
+- https://doc.rust-lang.org/rust-by-example/scope/lifetime.html
+- https://doc.rust-lang.org/reference/lifetime-elision.html
+- https://doc.rust-lang.org/nomicon/lifetimes.html
+- https://doc.rust-lang.org/error_codes/E0106.html

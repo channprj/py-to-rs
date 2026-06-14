@@ -813,3 +813,13 @@ fn main() {
 Chapter 7에서 우리는 `dataclass`와 Pydantic 모델을 `struct`로 옮기며 데이터의 *형태*를 모델링했습니다. 이번 챕터에서는 그 위에 얹혀 있던 OOP의 가장 무거운 유산 — **상속** — 을 내려놓고, 데이터의 재사용은 **컴포지션**으로, 행동의 공유는 **트레이트**로 분리하는 사고방식을 익혔습니다. 핵심은 하나입니다: Rust는 "is-a"의 암묵적 결합을 거부하고, "has-a"와 "can-do"의 명시적 조립을 택했으며, 그 대가로 취약한 기반 클래스·MRO 모호함·런타임 탐색 비용을 모두 컴파일 타임에 제거했습니다.
 
 이번 챕터에서 트레이트는 "행동 공유의 도구"로만 살짝 다뤘습니다. 하지만 트레이트는 그보다 훨씬 강력합니다. 파이썬 클래스의 진짜 마법인 **던더 메서드(`__str__`, `__add__`, `__eq__` ...)**, 즉 덕 타이핑의 근간이 Rust에서 어떻게 표준 트레이트(`Display`, `Add`, `PartialEq`)로 옮겨지며, 그것이 어떻게 컴파일 타임에 강제되는지 — 바로 다음 **Chapter 9. 매직 메서드(Dunder)에서 Trait으로**에서 본격적으로 파헤치겠습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch18-01-what-is-oo.html
+- https://doc.rust-lang.org/book/ch10-02-traits.html
+- https://doc.rust-lang.org/book/ch20-03-advanced-traits.html
+- https://doc.rust-lang.org/rust-by-example/generics/new_types.html
+- https://doc.rust-lang.org/rust-by-example/trait.html

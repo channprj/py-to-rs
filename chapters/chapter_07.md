@@ -814,3 +814,14 @@ error[E0609]: no field `is_admin` on type `User`
 이번 장에서 우리는 파이썬 클래스의 정체가 비싼 `__dict__` 해시 테이블이었음을 메모리 바이트로 확인했고, 그것을 객체 헤더 없이 연속 배치되는 Rust `struct`로 옮겼습니다. `__init__` 대신 연관 함수 `new`를, `@property` 대신 모듈 경계와 검증 생성자를, `dataclass`의 기본값 대신 `Default` 트레이트와 구조체 갱신 문법을 손에 넣었습니다. 무엇보다 `Pydantic`의 런타임 검증을, 컴파일 타임에 코드를 생성하는 `serde`와 "유효하지 않으면 만들어질 수 없는" 뉴타입 타입으로 대체하며 — 검증을 코드가 아니라 타입에 새기는 사고방식을 배웠습니다. Chapter 4~6의 소유권·대여·수명이 이 모든 곳에서 일관되게 작동하는 것도 다시 확인했습니다.
 
 하지만 우리는 아직 데이터를 *조합*하는 법은 다루지 않았습니다. 파이썬 개발자가 가장 버리기 힘들어하는 OOP의 유산, **상속(Inheritance)**은 어디로 갔을까요? 다음 장(Chapter 8)에서는 Rust가 의도적으로 상속을 배제한 이유와, 그 빈자리를 채우는 **컴포지션(Composition)**과 **뉴타입 패턴(Newtype Pattern)** — 이번 장 7.6에서 맛본 그 `Price(f64)`의 본격적인 활용 — 을 살펴봅니다. "바나나를 원했는데 고릴라와 정글을 얻는" 상속의 함정에서, Rust가 어떻게 우리를 구해내는지 확인할 차례입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch05-00-structs.html
+- https://doc.rust-lang.org/book/ch05-01-defining-structs.html
+- https://doc.rust-lang.org/book/ch05-03-method-syntax.html
+- https://doc.rust-lang.org/rust-by-example/custom_types/structs.html
+- https://serde.rs/
+- https://docs.rs/serde/latest/serde/

@@ -697,3 +697,14 @@ warning: unused implementer of `Future` that must be used
 지금까지 Part 6 "GIL의 해방과 동시성"의 마지막 조각을 맞췄습니다. Chapter 16의 진짜 멀티스레딩, Chapter 17의 `Arc`/`Mutex`/`Send`/`Sync`, 그리고 이번 챕터의 `async`/`await`까지 — Rust의 동시성 도구함이 완성됐습니다. 파이썬이 GIL과 단일 스레드 이벤트 루프라는 두 겹의 족쇄로 묶어두었던 것을, Rust는 컴파일러가 안전을 보증하는 멀티코어 동시성·병렬성으로 풀어냈습니다.
 
 그리고 이 모든 안전 장치 뒤에는 한 가지 공통된 마법이 있었습니다. `async fn`이 상태 기계로, `?`가 에러 전파 코드로, `#[derive(Debug)]`가 출력 코드로 **컴파일 타임에 변환**되는 능력입니다. 다음 파트(Part 7)에서는 이 변환을 우리 손으로 직접 일으키는 도구, 파이썬의 데코레이터와 메타클래스를 런타임 오버헤드 없이 대체하는 **매크로(Macro)**의 세계로 들어갑니다. Chapter 19에서 `macro_rules!`와 절차적 매크로로 "코드를 짜는 코드"를 작성해봅니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch17-00-async-await.html
+- https://doc.rust-lang.org/book/ch17-01-futures-and-syntax.html
+- https://rust-lang.github.io/async-book/
+- https://doc.rust-lang.org/std/future/trait.Future.html
+- https://tokio.rs/tokio/tutorial
+- https://docs.rs/reqwest/latest/reqwest/

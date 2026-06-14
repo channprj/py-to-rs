@@ -298,3 +298,14 @@ opt-level = 3             # 기본값. 0~3 + "s"(크기 최적화). 필요 시 �
 > **벤치마크 기준 환경:** Apple Silicon (aarch64), Rust 1.96.0 stable `--release` 빌드, CPython 3.11. 수치는 절대값보다 **상대 배수**가 중요하며, 여러분의 머신에서는 달라질 수 있습니다. 과장을 피하기 위해 현실적 범위(보통 2~50배)만 제시하고, 측정 코드를 함께 싣습니다.
 
 이제 준비가 끝났습니다. 다음 [Chapter 1](./chapters/chapter_01.md)에서, 여러분이 매일 치는 다섯 줄짜리 Python 함수가 CPU 위에서 실제로 무엇을 하는지 — 그리고 그 비용이 어디에 숨어 있는지 — 메모리 바이트 단위로 해부하며 본격적인 여정을 시작합니다.
+
+---
+
+## References
+
+- https://www.rust-lang.org/tools/install
+- https://rust-lang.github.io/rustup/
+- https://doc.rust-lang.org/book/ch01-00-getting-started.html
+- https://play.rust-lang.org/
+- https://www.rust-lang.org/learn
+- https://doc.rust-lang.org/book/

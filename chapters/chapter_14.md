@@ -925,3 +925,14 @@ v.retain(|&x| x % 2 == 0); // 짝수만 남김 → [2, 4]
 하지만 이 약간의 엄격함을 대가로, 우리는 파이썬의 백그라운드에서 끊임없이 돌아가는 참조 카운팅 연산과 포인터 추적으로 파편화된 메모리 접근 오버헤드를 완전히 걷어냈습니다. `Vec<i64>`는 그 자체로 `numpy` 배열이고, `HashMap`은 SIMD로 가속된 SwissTable이며, `String`은 글자 경계를 함부로 깨지 않는 안전한 UTF-8 버퍼입니다. 무엇보다 이 모든 것이 무비용 추상화(Zero-cost Abstraction)로, 런타임 비용 없이 컴파일 타임에 검증됩니다.
 
 이 컬렉션들은 그저 데이터를 담아두는 그릇에 그치지 않습니다. 다음 Chapter 15에서는 이 그릇 안의 데이터를 **루프보다도 빠르게, 그리고 우아하게** 처리하는 방법을 다룹니다. 파이썬의 제너레이터(`yield`)와 리스트 컴프리헨션을 뛰어넘는 **이터레이터(Iterator)와 클로저(Closure)**가 그 주인공입니다. 방금 만든 로그 분석기의 `for` 루프와 `sort_by`가, 이터레이터 체이닝으로 어떻게 더 선언적이면서도 어셈블리 레벨에서 동일하거나 더 빠른 코드로 컴파일되는지 보게 될 것입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch08-00-common-collections.html
+- https://doc.rust-lang.org/book/ch08-02-strings.html
+- https://doc.rust-lang.org/std/vec/struct.Vec.html
+- https://doc.rust-lang.org/std/string/struct.String.html
+- https://doc.rust-lang.org/std/collections/struct.HashMap.html
+- https://doc.rust-lang.org/std/primitive.str.html

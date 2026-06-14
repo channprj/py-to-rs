@@ -924,3 +924,13 @@ enum Packet {
 이로써 Part 3 "Python 객체지향의 해체"의 데이터 모델링 축이 거의 완성되었습니다. struct(곱 타입, Ch7), 컴포지션(Ch8), 트레이트로서의 행동(Ch9), 그리고 enum(합 타입)과 다형성(Ch10)까지. 남은 한 조각은 *조립*입니다.
 
 다음 Chapter 11에서는 OOP의 마지막 유산 두 가지를 다룹니다. 첫째, Django의 `LoginRequiredMixin` 같은 **다중 상속 기반 믹스인(Mixin)**을 Trait의 기본 메서드(Default Method)로 어떻게 깔끔히 대체하는가. 둘째, 인자 수십 개짜리 `__init__`와 `*args`/`**kwargs`의 혼돈을, 컴파일 타임에 필수 필드 누락까지 잡아내는 **빌더 패턴(Builder Pattern)** — 그리고 이번 챕터에서 맛본 typestate를 빌더에 적용해 "불완전한 객체의 build()"를 컴파일 에러로 막는 기법 — 으로 어떻게 우아하게 푸는가. 닫힌 집합을 모델링하는 법을 익혔으니, 이제 그것들을 *안전하게 조립*할 차례입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch06-00-enums.html
+- https://doc.rust-lang.org/book/ch06-02-match.html
+- https://doc.rust-lang.org/book/ch18-02-trait-objects.html
+- https://doc.rust-lang.org/rust-by-example/custom_types/enum.html
+- https://doc.rust-lang.org/std/option/enum.Option.html

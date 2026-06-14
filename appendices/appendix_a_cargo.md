@@ -398,3 +398,14 @@ $ CARGO_TARGET_DIR=/tmp/shared-target cargo build           # target/ 공유로 
 ---
 
 이상이 Cargo·rustup의 일상 작업에 필요한 명령과 매니페스트 필드의 핵심 레퍼런스입니다. 개념적 배경과 "왜"는 Chapter 2를, 각 명령의 전체 옵션은 `cargo <cmd> --help`와 [The Cargo Book](https://doc.rust-lang.org/cargo/)을 참조하세요.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/cargo/
+- https://doc.rust-lang.org/cargo/commands/
+- https://doc.rust-lang.org/cargo/reference/manifest.html
+- https://doc.rust-lang.org/cargo/reference/profiles.html
+- https://rust-lang.github.io/rustup/
+- https://doc.rust-lang.org/rustc/

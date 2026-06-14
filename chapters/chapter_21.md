@@ -602,3 +602,14 @@ fn main() {
 이번 장에서 우리는 Rust의 안전 보장이 끝나는 경계로 걸어가, 그 너머의 C 세계와 대화하는 법을 배웠습니다. `unsafe`는 안전을 끄는 스위치가 아니라 다섯 가지 능력을 잠금 해제하는 좁은 게이트이며, 원시 포인터는 컴파일러의 보장만 벗겨낸 C 포인터이고, `extern "C"`·`#[no_mangle]`·`#[repr(C)]`는 호출 규약·이름 맹글링·메모리 레이아웃이라는 ABI 3대 약속을 양쪽에서 맞추는 장치였습니다. 그리고 그 모든 위험을 안전한 추상화 뒤에 봉인하는 패턴 — std가, 그리고 곧 만날 PyO3가 따르는 그 패턴 — 이 핵심이었습니다.
 
 20장에서 본 `Box`/`Rc`/`RefCell` 같은 스마트 포인터가 안전한 Rust 안에서 메모리를 다루는 도구였다면, 이번 장의 `unsafe`와 FFI는 그 안전 영역 *바깥*과 통신하는 도구였습니다. 이제 두 세계를 잇는 다리를 직접 놓을 차례입니다. 21.3에서 본 파이썬 C-API의 참조 카운팅 지옥, 21.6의 `repr(C)`와 `CString` 줄다리기, 21.7의 안전 래퍼 패턴 — 이 모든 것을 누군가 이미 `unsafe` 블록 안에 완벽하게 검증해 봉인하고, 우리에게는 매크로 한 줄과 안전한 구조체만 건네준다면 어떨까요? 그 포장지의 이름이 바로 이 가이드의 최종 목적지, **PyO3**입니다. 다음 장에서 파이썬과 Rust가 물리적으로 하나의 `.so` 파일이 되는 과정을 직접 만들어 보겠습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch20-01-unsafe-rust.html
+- https://doc.rust-lang.org/nomicon/ffi.html
+- https://doc.rust-lang.org/std/ffi/index.html
+- https://doc.rust-lang.org/reference/items/external-blocks.html
+- https://doc.rust-lang.org/std/keyword.unsafe.html
+- https://rust-lang.github.io/rust-bindgen/

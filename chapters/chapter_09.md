@@ -809,3 +809,14 @@ fn process<H: Handler>(handler: &H) { handler.run(); }
 이번 챕터에서 우리는 파이썬의 던더 메서드가 Rust의 표준 트레이트로 어떻게 1:1 대응되는지, 그리고 그 대응이 단순한 문법 치환이 아니라 **"런타임 검사를 컴파일 타임 증명으로 옮기는"** 사고방식의 전환임을 확인했습니다. `Vector2D`는 `Display`부터 `From<(f64, f64)>`까지 갖춘 완전한 값 타입이 되었고, 그 과정에서 단일형화와 vtable, fat pointer, 고아 규칙, newtype 우회를 메모리 바이트와 벤치마크 수치로 해부했습니다. 핵심 교훈은 하나입니다 — Rust의 트레이트는 파이썬 던더의 표현력을 거의 그대로 주면서, 그 비용을 0으로 만들고 함정을 컴파일 에러로 바꿉니다.
 
 `dyn Trait`으로 다형성을 다뤘지만, "구현 타입이 미리 정해진 닫힌 집합"이라면 더 빠르고 안전한 길이 있다고 암시했습니다. 다음 Chapter 10에서는 파이썬 개발자가 `Union` 타입과 `isinstance()`로 씨름하던 문제를, Rust의 **열거형(Enum)과 패턴 매칭**이 런타임 오버헤드 없이, 그리고 "모든 경우를 빠짐없이 처리했는가(Exhaustiveness)"를 컴파일러가 보장하며 어떻게 우아하게 해결하는지 — 결제 상태 기계를 모델링하며 확인하겠습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch10-02-traits.html
+- https://doc.rust-lang.org/std/fmt/trait.Display.html
+- https://doc.rust-lang.org/std/fmt/trait.Debug.html
+- https://doc.rust-lang.org/std/cmp/trait.PartialOrd.html
+- https://doc.rust-lang.org/std/ops/index.html
+- https://doc.rust-lang.org/book/ch20-03-advanced-traits.html

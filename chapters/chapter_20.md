@@ -803,3 +803,14 @@ fn main() {
 지금까지 우리는 파이썬 인터프리터가 모든 객체에 자동으로 부여하던 능력 — 힙 할당, 참조 카운팅, 무제한 가변성, 순환 허용 — 을 Rust의 네 가지 명시적 부품(`Box`, `Rc`, `RefCell`, `Weak`)으로 분해했다가 다시 조립했습니다. 파이썬 객체 하나가 사실은 `Rc<RefCell<T>>`였고, 순환을 청소하던 GC의 자리에 `Weak`라는 설계 책임이 들어선다는 것을 확인했습니다. 그 대가로 우리는 백그라운드 GC 없는 결정론적 메모리 해제와, 대부분의 실수를 컴파일 타임에 잡는 안전망을 얻었습니다.
 
 이로써 Part 7의 고급 언어 탐험을 마칩니다. 우리는 매크로로 메타프로그래밍을, 스마트 포인터로 메모리 그래프를 정복했습니다. 그런데 지금까지 다룬 모든 것은 Rust라는 안전한 성벽 **안쪽**의 이야기였습니다. 다음 장 **Chapter 21: C FFI와 Unsafe Rust**에서는 그 성벽 밖으로 나갑니다 — 컴파일러의 보증이 닿지 않는 영역에서 C 라이브러리와 손을 잡고, `unsafe` 키워드로 직접 포인터를 다루며, 그 위험을 통제하는 법을 배웁니다. 이것이 파이썬과 Rust가 물리적으로 결합하는 다리(Chapter 22의 PyO3)를 놓기 위한 마지막 준비입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch15-00-smart-pointers.html
+- https://doc.rust-lang.org/book/ch15-01-box.html
+- https://doc.rust-lang.org/book/ch15-04-rc.html
+- https://doc.rust-lang.org/book/ch15-05-interior-mutability.html
+- https://doc.rust-lang.org/book/ch15-06-reference-cycles.html
+- https://doc.rust-lang.org/std/cell/struct.RefCell.html

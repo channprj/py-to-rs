@@ -635,3 +635,14 @@ Rust의 동시성은 파이썬과 근본적으로 다른 약속 위에 서 있�
 이번 챕터에서 우리는 `move`로 소유권을 넘기고, 채널로 통신하고, `scope`로 안전하게 빌리고, `rayon`으로 데이터를 병렬로 흘려보냈습니다. 하지만 한 가지를 의도적으로 미뤘습니다 — 여러 스레드가 **동시에 하나의 값을 읽고 쓰는** 진짜 공유 상태입니다. 글로벌 캐시, 조회수 카운터, 누적 집계기. 16.10절 함정 3에서 경고했듯, 이것은 위험천만하지만 때로 불가피합니다. 그리고 `Rc`를 스레드로 보내려다 만난 `error[E0277]: Rc cannot be sent`가 가리킨 해답이 바로 그 다음 장에 있습니다.
 
 **Chapter 17: 상태 공유와 동기화**에서는 원자적 참조 카운트 `Arc<T>`와, 데이터를 락으로 감싸 "락 없이는 접근조차 못 하게" 강제하는 `Mutex<T>`·`RwLock<T>`를 파헤칩니다. 파이썬의 `threading.Lock`이 무시할 수 있는 신호등이었다면, Rust의 `Mutex<T>`는 데이터를 물리적으로 가둔 금고입니다. 그리고 그 금고를 잘못 다뤘을 때 발생하는 데드락마저, Rust의 타입 시스템과 RAII가 어떻게 도와주는지 보게 될 것입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch16-00-concurrency.html
+- https://doc.rust-lang.org/book/ch16-01-threads.html
+- https://doc.rust-lang.org/book/ch16-02-message-passing.html
+- https://doc.rust-lang.org/std/thread/index.html
+- https://doc.rust-lang.org/std/sync/mpsc/index.html
+- https://doc.rust-lang.org/rust-by-example/std_misc/channels.html

@@ -762,3 +762,14 @@ fn main() {
 16장에서 우리는 메시지 패싱으로 스레드 간 통신의 우아함을 배웠고, 이번 17장에서는 그것만으로는 부족한 진짜 공유 상태의 세계를 다뤘습니다. 핵심은 하나입니다. Rust는 "락을 거는 규율"을 양심에서 타입 시스템으로 옮겼습니다. 데이터를 `Mutex`/`RwLock` 안에 가두어 락 없이는 접근조차 못 하게 하고, `Arc`로 소유권을 안전하게 나누며, `Send`/`Sync`라는 자동 트레이트로 무엇이 스레드를 건널 수 있는지를 컴파일 타임에 판정합니다. `Rc`를 스레드로 보내려는 단 한 줄의 실수가 `E0277`로 박멸되는 것을 직접 확인했고, 동시에 데드락은 여전히 개발자의 책임으로 남아 있다는 한계도 분명히 했습니다.
 
 지금까지 본 모든 동시성은 **OS 스레드** 위에 서 있었습니다. 스레드 하나는 메가바이트 단위의 스택을 차지하므로, 수만 개의 동시 커넥션을 OS 스레드로 감당하기는 어렵습니다. 그래서 현대 백엔드는 수만 개의 가벼운 "태스크"를 소수의 스레드 위에서 협력적으로 굴리는 비동기(Async) 모델로 갑니다. 다음 18장에서는 파이썬의 `asyncio` 이벤트 루프와 Rust의 `tokio` 런타임을 정면으로 비교하고, `Future`가 어떻게 상태 기계(State Machine)로 변환되는지, 그리고 이번 장에서 예고한 "락을 든 채 `.await` 하는" 함정이 왜 그토록 위험한지를 파헤칩니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch16-03-shared-state.html
+- https://doc.rust-lang.org/book/ch16-04-extensible-concurrency-sync-and-send.html
+- https://doc.rust-lang.org/std/sync/struct.Arc.html
+- https://doc.rust-lang.org/std/sync/struct.Mutex.html
+- https://doc.rust-lang.org/std/sync/struct.RwLock.html
+- https://doc.rust-lang.org/std/marker/trait.Send.html

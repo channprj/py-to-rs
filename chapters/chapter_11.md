@@ -1027,3 +1027,13 @@ pub fn port(mut self, p: u16) -> Self {
 지금까지 세 개 장(Chapter 8 컴포지션, Chapter 9 트레이트, Chapter 10 열거형)에 이어, 파이썬 객체지향의 마지막 두 기둥인 **Mixin(행동 재사용)**과 **복잡한 생성자(객체 조립)**가 Rust에서 어떻게 환생하는지 해부했습니다. 상속은 트레이트 합성과 블랭킷 impl로, `**kwargs`는 타입으로 검증되는 빌더로 치환됩니다. 그리고 그 모든 추상화가 단일형화와 ZST 덕분에 런타임 비용 0으로 사라진다는 것까지 확인했습니다. 이로써 Part 3 "Python 객체지향의 해체와 Rust 데이터 모델링"을 마칩니다.
 
 여기까지 우리는 "올바른 데이터를 어떻게 모델링하고 만드는가"에 집중했습니다. 하지만 현실의 코드는 실패합니다. 파일이 없고, 네트워크가 끊기고, 입력이 망가집니다. 11.7에서 `TryFrom`이 `Result`를 돌려주는 걸 잠깐 봤고, 11.10에서 "검증 실패는 패닉이 아니라 값으로"라고 예고했습니다. 다음 Part 4의 Chapter 12 「`try-except`는 없다: `Option`과 `Result`」에서는, 파이썬 개발자가 본능적으로 `try-except`로 감싸던 모든 실패를 Rust가 어떻게 **타입 시스템 안의 값**으로 끌어들이는지, 그 패러다임 전환을 다룹니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch10-02-traits.html
+- https://doc.rust-lang.org/reference/items/traits.html
+- https://doc.rust-lang.org/std/default/trait.Default.html
+- https://rust-lang.github.io/api-guidelines/type-safety.html
+- https://doc.rust-lang.org/rust-by-example/trait.html

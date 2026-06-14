@@ -910,3 +910,14 @@ fn main() {
 파이썬은 이 답을 런타임이 떠맡았습니다 — GC가 수명을, 덕 타이핑이 능력을 확인했고, 틀리면 새벽 2시에 알려 주었습니다. Rust는 같은 질문을 컴파일 타임으로 끌어와 답을 못 내면 바이너리를 만들지 않습니다. 초반엔 깐깐한 게이트키퍼처럼 느껴지지만, 익숙해지면 **가장 빠르고 정확한 페어 프로그래머**임을 알게 됩니다. `help` 한 줄이 곧 정답이고, `rustc --explain`은 무료 과외 교사입니다.
 
 같은 에러를 세 번 만났다면 문법 실수가 아니라 멘탈 모델의 빈틈입니다. 표의 챕터로 돌아가세요. 그 빈틈을 메우는 순간, 컴파일러와의 싸움은 협업으로 바뀝니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/error_codes/error-index.html
+- https://doc.rust-lang.org/error_codes/E0382.html
+- https://doc.rust-lang.org/error_codes/E0499.html
+- https://doc.rust-lang.org/error_codes/E0277.html
+- https://doc.rust-lang.org/error_codes/E0308.html
+- https://doc.rust-lang.org/rustc/

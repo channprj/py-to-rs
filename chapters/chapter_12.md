@@ -793,3 +793,13 @@ fn name_len(opt: &Option<String>) -> usize {
 이번 장에서 우리는 파이썬의 보이지 않는 두 함정 — Null(`None`)과 예외(Exception) — 을 Rust가 어떻게 타입 시스템 안으로 끌어들이는지 보았습니다. `Option<T>`은 부재를, `Result<T, E>`은 실패를 시그니처에 새기고, 컴파일러는 그 처리를 강제합니다. 니치 최적화 덕분에 이 안전성은 대부분 0바이트 추가 비용이며, `match`의 장황함은 `map`/`and_then`/`ok_or_else` 같은 모나드적 조합자로 평탄한 파이프라인이 됩니다. 그리고 우리는 복구 가능한 오류(`Result`)와 프로그래밍 버그(`panic!`)를 다른 채널로 분리하는 Rust의 규율을 배웠습니다.
 
 하지만 한 가지 고통이 남았습니다. 콜스택 깊은 곳에서 발생한 에러를 상위로 전파하려면 매번 `match`로 받아 `return Err(e)`를 해야 할까요? 12.7에서 슬쩍 등장한 `?` 연산자가 바로 그 보일러플레이트를 한 글자로 지워버립니다. 다음 Chapter 13에서는 `?`의 마법을 완전히 해부하고, 서로 다른 에러 타입을 `From` 트레이트로 자동 변환하는 메커니즘, 그리고 실무 표준인 `thiserror`(라이브러리용 구조화된 에러)와 `anyhow`(애플리케이션용 동적 에러)로 파이썬의 복잡한 커스텀 Exception 계층도를 어떻게 Rust 에러 설계로 마이그레이션하는지를 다룹니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch06-01-defining-an-enum.html
+- https://doc.rust-lang.org/std/option/enum.Option.html
+- https://doc.rust-lang.org/std/result/enum.Result.html
+- https://doc.rust-lang.org/rust-by-example/error/option_unwrap.html
+- https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html

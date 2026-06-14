@@ -769,3 +769,14 @@ error: `$x:expr` is followed by `+`, which is not allowed for `expr` fragments
 지금까지 파이썬이 런타임에 부리던 마법 — 데코레이터의 함수 래핑, 메타클래스의 클래스 조작 — 을 Rust가 어떻게 컴파일 타임으로 끌어올렸는지 보았습니다. `macro_rules!`로 가변 인자와 컴파일 타임 코드 생성을 다루고, 위생으로 변수 충돌을 원천 차단하며, 절차적 매크로로 구조체를 분석해 트레이트 구현을 통째로 만들어냈습니다. 핵심 교훈은 하나입니다. **파이썬의 메타프로그래밍은 실행 중인 객체를 조작해 유연함을 얻는 대신 런타임 비용과 불투명함을 지불하고, Rust의 메타프로그래밍은 컴파일 중인 소스를 조작해 무비용 추상화와 타입 안전을 지킵니다.** `#[derive(Serialize)]` 한 줄이 Pydantic 전체를 대체하면서도 런타임 오버헤드가 0인 이유, `#[tokio::main]`이 `async fn`을 일반 함수로 둔갑시키는 원리가 이제 더 이상 마법으로 보이지 않을 것입니다.
 
 매크로는 "코드를 짜는 코드"였습니다. 다음 Chapter 20에서는 다시 메모리의 세계로 내려가, 컴파일러의 엄격한 소유권 규칙을 런타임으로 살짝 미뤄주는 또 다른 도구 — `Box<T>`, `Rc<T>`, `RefCell<T>` 같은 **스마트 포인터(Smart Pointer)**를 다룹니다. 파이썬이 GC로 손쉽게 만들던 순환 참조 그래프와 양방향 연결 리스트를, Rust에서 안전하게 — 그리고 그 비용을 정확히 의식하며 — 손수 구현해볼 차례입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch20-05-macros.html
+- https://doc.rust-lang.org/reference/macros-by-example.html
+- https://doc.rust-lang.org/reference/procedural-macros.html
+- https://doc.rust-lang.org/rust-by-example/macros.html
+- https://docs.rs/syn/latest/syn/
+- https://docs.rs/quote/latest/quote/

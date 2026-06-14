@@ -245,3 +245,14 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 > 💡 마지막 조언: 이 부록의 표는 출발점이지, 정답지가 아닙니다. 생태계는 움직입니다 — 어제의 표준이 오늘 deprecated가 되고(`serde_yaml`, `dotenv`), 새 강자가 등장합니다(`polars`, `axum`). 그러나 판단 *방법*은 변하지 않습니다. lib.rs에서 카테고리를 열고, 다운로드 추세와 유지보수 활성도를 보고, `cargo tree`로 의존성을 확인하고, 다운스트림 의존자를 살피세요. 10년간 PyPI에서 좋은 패키지를 골라낸 그 감각은 그대로 이전됩니다 — 다만 Rust에서는 그 감각을 뒷받침할 정량적 도구가 더 잘 갖춰져 있습니다.
 
 이 부록의 지도를 손에 들었다면, 이제 파이썬에서 하던 거의 모든 작업의 Rust 대응물을 알고 있는 셈입니다. 비어 있던 백지가 채워졌습니다. 남은 것은 실제로 `cargo add`를 입력하고, docs.rs를 열고, 첫 줄을 컴파일하는 일뿐입니다.
+
+---
+
+## References
+
+- https://crates.io/
+- https://lib.rs/
+- https://blessed.rs/crates
+- https://docs.rs/
+- https://www.arewewebyet.org/
+- https://areweasyncyet.rs/

@@ -865,3 +865,14 @@ fn main() {
 Chapter 12~13에서 익힌 `Option`/`Result`/`?`가 이터레이터의 `filter_map`과 `collect::<Result<_,_>>()` 안에서 다시 살아나는 것을, Chapter 14의 `Vec`/`HashMap`이 `collect`의 목적지로 등장하는 것을 보았습니다. 이터레이터는 Rust의 데이터 처리가 한데 모이는 합류점입니다. 그리고 그 모든 추상화가 어셈블리에서 0의 비용으로 증발한다는 것을, 동일한 기계어를 눈으로 확인하며 증명했습니다.
 
 여기까지가 "데이터를 다루는" 여정의 마지막입니다 — 에러, 컬렉션, 그리고 이터레이션. 이제 진짜 클라이맥스로 갑니다. 파이썬 개발자를 십수 년간 괴롭혀온 GIL(Global Interpreter Lock)을 박살 내고, 모든 CPU 코어를 동시에 깨우는 **Part 6: 동시성(Concurrency)** 입니다. 흥미롭게도 그 시작점은 이번 챕터에서 본 클로저와, `rayon`의 `par_iter()`가 보여준 "이터레이터를 병렬로 흘려보내기"입니다. Chapter 16에서는 `std::thread`로 진짜 OS 스레드를 띄우고, Rust의 타입 시스템이 어떻게 데이터 레이스(Data Race)를 *컴파일 타임에* 원천 봉쇄하는지 — "두려움 없는 동시성"의 실체를 파헤칩니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch13-02-iterators.html
+- https://doc.rust-lang.org/book/ch13-04-performance.html
+- https://doc.rust-lang.org/std/iter/trait.Iterator.html
+- https://doc.rust-lang.org/std/iter/trait.IntoIterator.html
+- https://doc.rust-lang.org/rust-by-example/trait/iter.html
+- https://docs.rs/itertools/latest/itertools/

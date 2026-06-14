@@ -668,3 +668,13 @@ Part 1에서 우리는 왜 파이썬 엔지니어가 Rust를 배우는지(GIL·G
 긴 여정을 끝까지 함께해 주셔서 감사합니다. 이제 진짜 시작입니다.
 
 환영합니다, 새로운 Rustacean. 🦀
+
+---
+
+## References
+
+- https://pyo3.rs/
+- https://docs.rs/pyo3/latest/pyo3/
+- https://www.maturin.rs/
+- https://github.com/PyO3/pyo3
+- https://github.com/benfred/py-spy

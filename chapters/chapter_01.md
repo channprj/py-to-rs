@@ -486,3 +486,13 @@ help: consider cloning the value if the performance cost is acceptable
 이 챕터에서 우리는 Python의 생산성이 어떤 런타임 비용 위에 서 있는지(PyObject 28바이트, GIL, 동적 디스패치), 그리고 Rust가 그 비용을 어떻게 컴파일 타임으로 옮기는지(단일형화, 소유권, GC 없는 결정론적 해제)를 메모리 바이트와 컴파일러 에러 메시지 수준에서 확인했습니다. 핵심은 "Python을 버려라"가 아니라, **"Python이 끝나는 지점에서 쓸 무기를 손에 넣어라"**입니다.
 
 하지만 새 언어를 배우는 가장 큰 장벽은 문법이 아니라 **도구 생태계**입니다. `pip`인지 `poetry`인지 `uv`인지, `venv`를 어떻게 활성화하는지, `requirements.txt`와 `pyproject.toml`이 왜 따로 노는지 — 우리는 이 파편화된 도구들을 엮느라 너무 많은 시간을 썼습니다. 다음 [Chapter 2](./chapter_02.md)에서는 이 모든 것을 단 하나의 도구로 통합한 Rust의 `Cargo`를 만나, 패키징 지옥에서 영원히 탈출하는 법을 봅니다.
+
+---
+
+## References
+
+- https://www.rust-lang.org/
+- https://doc.rust-lang.org/book/foreword.html
+- https://doc.rust-lang.org/book/ch00-00-introduction.html
+- https://www.rust-lang.org/learn
+- https://doc.rust-lang.org/rust-by-example/

@@ -636,3 +636,14 @@ fn main() {
 하지만 우리는 동시에 소유권 모델의 불편함도 정직하게 마주했습니다. 함수에 값을 한 번 넘기면 잃어버리고, 되돌려받으려면 튜플 핑퐁을 해야 하며, 반복문 하나가 컬렉션을 통째로 삼켜 버립니다. 4장에서 만난 거의 모든 함정의 해법이 "그냥 `&`를 붙여라"였다는 점을 눈치챘을 것입니다.
 
 소유권을 빼앗기는 이 답답한 상황을 타개하기 위해, Rust는 객체의 주권을 유지한 채 다른 함수에게 값을 **"잠시 빌려주는"** 메커니즘을 고안했습니다. 소유권은 그대로 둔 채 읽기 권한(`&T`) 또는 쓰기 권한(`&mut T`)만 빌려주는 것입니다. 이것이 바로 다음 장에서 다룰 Rust 철학의 정수, **참조(References)와 대여(Borrowing)**입니다. 그리고 그 빌림에도 — 예상하셨겠지만 — Data Race를 컴파일 타임에 막아 내는 엄격하고 우아한 규칙이 기다리고 있습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch04-00-understanding-ownership.html
+- https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html
+- https://doc.rust-lang.org/rust-by-example/scope/move.html
+- https://doc.rust-lang.org/rust-by-example/scope/raii.html
+- https://doc.rust-lang.org/std/ops/trait.Drop.html
+- https://doc.rust-lang.org/error_codes/E0382.html

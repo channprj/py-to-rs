@@ -704,3 +704,13 @@ fn main() {
 지금까지 우리는 [Chapter 4](chapter_04.md)의 소유권에서 한 걸음 더 나아가, 소유권을 빼앗지 않고 데이터를 빌리는 **대여(Borrowing)**를 배웠습니다. 핵심은 단 하나의 XOR 규칙 — "불변 참조 여럿이거나 가변 참조 하나거나" — 이고, 이 규칙이 데이터 경쟁과 메모리 오염을 *런타임 비용 0으로* 컴파일 타임에 박멸한다는 것이었습니다. 참조는 8바이트 얇은 포인터로, 슬라이스는 16바이트 fat pointer로 표현되며, `copy.deepcopy`의 막대한 비용 없이 데이터를 무비용으로 공유합니다.
 
 하지만 한 가지 질문이 남았습니다. 컴파일러는 "이 참조가 원본보다 오래 살아남지 않는다"는 것을 *어떻게* 보장할까요? `word_count` 함수에 등장한 `'a` 표기는 정확히 무엇이며, 언제 우리가 직접 그것을 써야 할까요? 5.5절에서 NLL을 이야기하며 "참조의 수명은 마지막 사용까지"라고 했던 그 **수명(Lifetime)**의 정체를, 다음 [Chapter 6](chapter_06.md)에서 정면으로 마주합니다. 파이썬에는 개념조차 없는, 그러나 Rust의 메모리 안전을 완성하는 마지막 퍼즐 조각입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch04-02-references-and-borrowing.html
+- https://doc.rust-lang.org/book/ch04-03-slices.html
+- https://doc.rust-lang.org/rust-by-example/scope/borrow.html
+- https://doc.rust-lang.org/error_codes/E0502.html
+- https://doc.rust-lang.org/error_codes/E0499.html

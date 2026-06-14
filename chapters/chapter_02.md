@@ -742,3 +742,14 @@ $ ls -lh target/x86_64-unknown-linux-musl/release/json_echo
 지금까지 본 것처럼 Rust의 도구 생태계는 파이썬에서 여러 도구로 흩어져 있던 책임을 `rustup`과 `cargo`라는 두 축으로 통합하고, 결정론적 빌드와 정적 단일 바이너리로 배포 지옥을 끝냅니다. 더 깊은 차원에서 이것은 단순한 편의가 아니라, **"안전성과 성능은 빌드 타임에 결정된다"**는 Rust 철학의 첫 번째 발현입니다. 빌드가 일급 시민이기에, 컴파일러는 정수 오버플로를 잡고 feature로 코드를 깎아내고 LLVM으로 기계어를 최적화할 기회를 얻습니다.
 
 이제 환경이라는 무대가 정리되었으니, 다음 챕터에서는 무대 위에서 펼쳐지는 본 공연으로 들어갑니다. Chapter 3에서는 파이썬의 동적 타입과 문(Statement) 중심 구문이, Rust의 정적 타입과 표현식(Expression) 중심 구문으로 어떻게 번역되는지를 살펴봅니다. 특히 파이썬의 `int` 하나가 메모리에서 28바이트의 `PyObject`를 차지하는 반면 Rust의 `i64`가 정확히 8바이트인 이유를, 바이트 단위로 해부할 것입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/cargo/
+- https://doc.rust-lang.org/cargo/guide/
+- https://doc.rust-lang.org/book/ch01-03-hello-cargo.html
+- https://doc.rust-lang.org/cargo/reference/profiles.html
+- https://rust-lang.github.io/rustup/
+- https://crates.io/

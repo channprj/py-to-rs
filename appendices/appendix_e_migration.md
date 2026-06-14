@@ -304,3 +304,13 @@ aggregate = _aggregate
 다음 주에 출근하면 이 부록의 순서대로 한 걸음만 떼어 보세요. `py-spy`로 가장 느린 함수를 찾고, CPU 바운드이며 입출력이 단순한지 확인하고, 그 함수 하나만 PyO3로 옮겨 파이썬 결과와 대조하고, `--release`로 벤치마크하세요. 50줄짜리 첫 모듈이 7배 빨라지고 나머지 95%를 손대지 않고도 서비스가 빨라지는 경험은 백 마디 설명보다 강력합니다.
 
 절제하는 외과의가 되십시오. 전체를 들어내는 것이 아니라 가장 아픈 한 곳만 정확히. 그것이 마이그레이션의 처음이자 끝입니다.
+
+---
+
+## References
+
+- https://pyo3.rs/
+- https://www.maturin.rs/
+- https://github.com/benfred/py-spy
+- https://nnethercote.github.io/perf-book/
+- https://doc.rust-lang.org/cargo/commands/cargo-bench.html

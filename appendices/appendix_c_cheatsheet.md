@@ -704,3 +704,13 @@ fn main() -> Result<(), serde_json::Error> {
 | 병렬 처리 | `multiprocessing` | `rayon`의 `par_iter` (Chapter 16) |
 
 치트시트는 출발점일 뿐입니다. 표의 오른쪽 칸이 "왜 그렇게 생겼는지"는 본문 각 챕터가 메모리 레이아웃과 어셈블리 수준에서 증명합니다. 변환하다 막히면, 그 막힘은 거의 언제나 **소유권을 누가 갖는가**라는 질문으로 환원됩니다. 그 질문에 답하는 순간 Rust 코드는 자연스럽게 흘러나옵니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/
+- https://doc.rust-lang.org/rust-by-example/
+- https://doc.rust-lang.org/std/index.html
+- https://cheats.rs/
+- https://doc.rust-lang.org/reference/

@@ -772,3 +772,14 @@ let grade = if score >= 90 { "A" }
 이번 챕터에서 우리는 Rust의 문법이 단순히 "C처럼 생긴 파이썬"이 아니라, 표현식 기반의 사고와 메모리를 바이트 단위로 통제하는 타입 시스템 위에 세워졌음을 확인했습니다. `i32`는 정확히 4바이트이고, `()`는 0바이트이며, 구조체의 크기는 정렬과 패딩으로 결정되고, 정수는 폭을 넘으면 명시적으로 처리해야 합니다. 이 모든 것이 가리키는 한 가지 질문이 있습니다. **"이 데이터는 정확히 메모리 어디에, 얼마나, 언제까지 존재하는가?"**
 
 파이썬은 이 질문을 가비지 컬렉터에게 떠넘겼습니다. 편리했지만, 예측 불가능한 GC 일시정지와 객체 헤더의 무게를 대가로 치렀습니다. Rust는 이 질문에 *컴파일 타임에* 답합니다. 그 답을 내는 메커니즘이 바로 다음 챕터의 주제, **소유권(Ownership)** 입니다. 스택에 사는 4바이트 `i32`와 힙으로 가는 `String`이 변수 할당 시 각각 어떻게 다르게 움직이는지, GC 없이도 메모리가 정확히 0의 런타임 오버헤드로 해제되는 원리를 Chapter 4에서 파헤쳐 보겠습니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch03-00-common-programming-concepts.html
+- https://doc.rust-lang.org/book/ch03-02-data-types.html
+- https://doc.rust-lang.org/book/ch03-03-how-functions-work.html
+- https://doc.rust-lang.org/reference/expressions.html
+- https://doc.rust-lang.org/reference/type-layout.html
+- https://doc.rust-lang.org/std/mem/fn.size_of.html

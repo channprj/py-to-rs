@@ -660,3 +660,14 @@ fn main() {
 우리는 이제 Rust의 에러 처리 전체 그림을 손에 넣었습니다. [Chapter 12](./chapter_12.md)에서 `Option`과 `Result`라는 타입으로 실패를 *표현*하는 법을 배웠고, 이번 장에서는 그 실패를 `?`로 *전파*하고, `From`으로 *변환*하며, `thiserror`/`anyhow`로 *설계*하는 법을 배웠습니다. 파이썬의 암묵적 자동 전파가 주던 편의는 `?` 연산자가 한 글자로 되돌려주되, 전파되는 모든 에러 타입은 컴파일러가 영원히 추적합니다. 시그니처는 더 이상 거짓말하지 않고, 잡지 않은 에러는 배포될 수 없습니다.
 
 지금까지 Part 1부터 Part 4까지, 우리는 Rust의 *사고방식* — 소유권, 트레이트, 열거형, 에러 — 을 익혔습니다. 이제 그 사고방식 위에 실제 데이터를 담을 차례입니다. 다음 [Chapter 14](./chapter_14.md)부터 시작하는 Part 5에서는, 파이썬 개발자가 매일 쓰는 `list`, `dict`, `str`이 Rust에서 `Vec<T>`, `HashMap<K, V>`, `String`/`&str`으로 어떻게 변신하는지를 다룹니다. 특히 파이썬의 문자열 인덱싱이 Rust에서 왜 그대로 컴파일되지 않는지 — UTF-8과 소유권이 만나는 그 지점이 — 시니어 파이썬 개발자를 가장 자주 넘어뜨리는 다음 벽입니다.
+
+---
+
+## References
+
+- https://doc.rust-lang.org/book/ch09-00-error-handling.html
+- https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html
+- https://doc.rust-lang.org/std/error/trait.Error.html
+- https://doc.rust-lang.org/reference/expressions/operator-expr.html
+- https://docs.rs/thiserror/latest/thiserror/
+- https://docs.rs/anyhow/latest/anyhow/
