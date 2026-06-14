@@ -52,10 +52,11 @@ class Plain:
         self.a, self.b, self.c = a, b, c
 
 p = Plain(1, 2, 3)
-print(sys.getsizeof(p))            # 48 (인스턴스 헤더)
+print(sys.getsizeof(p))            # 48 (인스턴스 헤더, 포인터만)
 print(sys.getsizeof(p.__dict__))   # 296 (속성 해시 테이블)
-# 합계: 344 bytes — 게다가 a/b/c는 각각 별도 int 객체를 가리키는 포인터
+# 자료구조만의 합계: 48 + 296 = 344 bytes (가리키는 int 객체는 제외)
 print(sys.getsizeof(1))            # 28 (int 객체 하나의 크기)
+# 가리키는 데이터까지 포함한 총합: 344 + 28*3 = 428 bytes
 ```
 
 > 💡 **Under the Hood — 파이썬 객체의 진짜 크기**
@@ -63,10 +64,12 @@ print(sys.getsizeof(1))            # 28 (int 객체 하나의 크기)
 > `Plain(1, 2, 3)` 인스턴스 하나의 총 메모리 비용을 계산해 봅시다.
 >
 > - 인스턴스 헤더(`PyObject`: 타입 포인터 + 참조 카운트 + `__dict__` 슬롯 등): **48 bytes**
-> - `__dict__` 해시 테이블: **296 bytes** (CPython 3.13, 키 공유 최적화 적용 후에도)
+> - `__dict__` 해시 테이블: **296 bytes** (CPython 3.13.6, 키 공유 최적화 적용 후에도)
 > - 필드 `a`, `b`, `c`가 가리키는 `int` 객체 3개: **각 28 bytes × 3 = 84 bytes**
 >
-> 합계는 **400 bytes를 가뿐히 넘깁니다.** 우리가 저장하려던 데이터는 정수 세 개 — 본질적으로 24 bytes면 충분합니다. 나머지 90% 이상은 동적 타입 시스템을 떠받치기 위한 부대 비용입니다. 그리고 이 객체들은 힙 여기저기에 흩어져 있어, CPU 캐시 입장에서는 최악의 접근 패턴입니다. 필드 하나를 읽을 때마다 포인터를 따라 캐시 미스가 날 메모리 주소로 점프해야 합니다.
+> 여기서 두 가지 수치를 명확히 구분해야 합니다. **자료구조 자체(헤더 + 딕셔너리)만 따지면 48 + 296 = 344 bytes**입니다. `sys.getsizeof`는 객체가 *직접* 소유한 메모리만 세고, 필드가 *가리키는* `int` 객체는 포함하지 않으므로, 위 두 줄을 단순 합산한 값이 바로 이 344입니다. 반면 **필드가 가리키는 `int` 객체 3개(28 × 3 = 84)까지 포함하면 총 428 bytes**가 됩니다. 즉 344는 "그릇의 무게", 428은 "그릇 + 내용물의 무게"입니다. 7.1 끝의 비교표는 후자(가리키는 데이터까지 포함한 ~428 bytes)를 기준으로 합니다.
+>
+> 어느 쪽으로 세든, 우리가 저장하려던 데이터는 정수 세 개 — 본질적으로 24 bytes면 충분합니다. 나머지 90% 이상은 동적 타입 시스템을 떠받치기 위한 부대 비용입니다. 그리고 이 객체들은 힙 여기저기에 흩어져 있어, CPU 캐시 입장에서는 최악의 접근 패턴입니다. 필드 하나를 읽을 때마다 포인터를 따라 캐시 미스가 날 메모리 주소로 점프해야 합니다.
 
 ### `__slots__`로 발버둥치기
 
@@ -84,7 +87,7 @@ print(hasattr(s, "__dict__"))      # False — 동적 속성 추가 차단
 # s.is_admin = True                # 🚨 AttributeError!
 ```
 
-`__slots__`는 인스턴스마다 딕셔너리를 만드는 대신, 클래스 레벨에 고정된 디스크립터 슬롯을 둡니다. 메모리는 344 → 56 bytes로 줄고, 동적 속성 추가도 막힙니다. **이것이 바로 우리가 Rust `struct`에서 *공짜로, 기본값으로* 얻는 것입니다.** 파이썬에서는 `__slots__`를 의식적으로 선언하고, 상속과의 미묘한 상호작용을 감수하고, 그래도 여전히 각 필드는 힙의 `int` 객체를 가리키는 포인터로 남습니다. Rust에서는 이 모든 게 언어의 기본 동작입니다.
+`__slots__`는 인스턴스마다 딕셔너리를 만드는 대신, 클래스 레벨에 고정된 디스크립터 슬롯을 둡니다. 자료구조 자체의 메모리는 344(헤더 48 + dict 296) → 56 bytes로 줄고, 동적 속성 추가도 막힙니다. **이것이 바로 우리가 Rust `struct`에서 *공짜로, 기본값으로* 얻는 것입니다.** 파이썬에서는 `__slots__`를 의식적으로 선언하고, 상속과의 미묘한 상호작용을 감수하고, 그래도 여전히 각 필드는 힙의 `int` 객체를 가리키는 포인터로 남습니다. Rust에서는 이 모든 게 언어의 기본 동작입니다.
 
 | 측정 항목 | 파이썬 `Plain` (dict) | 파이썬 `Slotted` (slots) | Rust `struct` (3 × i64) |
 |---|---|---|---|
@@ -339,7 +342,7 @@ fn main() {
 
 > 💡 **핵심 — 과도한 getter/setter는 안티패턴**
 >
-> 파이썬에서 `@property`로 모든 필드를 감싸는 습관이 있다면 잠시 멈추세요. Rust에서 단순히 값을 그대로 반환하는 getter는 **불필요한 보일러플레이트**인 경우가 많습니다. 검증 로직이나 불변식(invariant)이 *없다면*, 그냥 필드를 `pub`으로 공개하는 편이 더 정직하고 관용적입니다. getter/setter는 "이 필드는 항상 음수가 아니다" 같은 **지켜야 할 규칙이 있을 때만** 만드세요. 7.9의 안티패턴 섹션에서 다시 다룹니다.
+> 파이썬에서 `@property`로 모든 필드를 감싸는 습관이 있다면 잠시 멈추세요. Rust에서 단순히 값을 그대로 반환하는 getter는 **불필요한 보일러플레이트**인 경우가 많습니다. 검증 로직이나 불변식(invariant)이 *없다면*, 그냥 필드를 `pub`으로 공개하는 편이 더 정직하고 관용적입니다. getter/setter는 "이 필드는 항상 음수가 아니다" 같은 **지켜야 할 규칙이 있을 때만** 만드세요. 7.11의 안티패턴 섹션에서 다시 다룹니다.
 
 ---
 
@@ -606,7 +609,7 @@ struct LogEntry<'a> {
 fn main() {
     let raw = r#"{"level":"ERROR","message":"disk full"}"#;
 
-    // borrow_from_str: level/message가 raw의 메모리를 직접 가리킴 (복사 없음)
+    // from_str로 역직렬화: level/message가 raw의 메모리를 직접 가리킴 (복사 없음)
     let entry: LogEntry = serde_json::from_str(raw).unwrap();
     println!("{} - {}", entry.level, entry.message);
     // entry는 raw보다 오래 살 수 없음 — 컴파일러가 수명으로 강제
@@ -616,6 +619,87 @@ fn main() {
 여기서 Chapter 6의 수명 규칙이 정확히 작동합니다. `LogEntry<'a>`의 필드들은 `raw`의 메모리를 빌린 것이므로, `entry`는 `raw`보다 오래 살 수 없습니다. 만약 `raw`가 먼저 해제되는데 `entry`를 쓰려 하면 컴파일러가 dangling reference로 거부합니다. 파이썬에서는 상상할 수 없는, "복사하지 않고도 안전한" 파싱입니다. 단, JSON에 이스케이프 문자(`\n`, `\"` 등)가 있으면 변환이 필요해 빌림이 불가능하니, 이럴 땐 `Cow<str>`(빌리거나 소유하거나 둘 중 하나, Chapter 14)를 쓰는 것이 실무 패턴입니다.
 
 이것이 데이터 모델 필드를 무작정 `String`으로 둘지, `&str`로 둘지 결정하는 진짜 기준입니다. **데이터를 입력 버퍼보다 오래 보관해야 하면 `String`(소유), 입력의 수명 안에서만 훑고 버린다면 `&str`(빌림)** — Chapter 6에서 본 그 판단 기준이 데이터 모델링에 그대로 적용됩니다.
+
+### 흔한 함정 — `#[serde(borrow)]` 없이 기대하는 '가짜 제로카피'
+
+제로카피의 매력에 빠진 시니어가 가장 먼저 밟는 지뢰가 있습니다. "필드를 `Cow<str>`로 두면 알아서 빌려보겠지"라는 기대입니다. `Cow`(Clone-on-Write, Chapter 14)는 "빌린 슬라이스(`Borrowed`)거나 소유한 `String`(`Owned`) 둘 중 하나"를 담는 열거형이라, 제로카피 역직렬화의 안전판으로 자주 권장됩니다. 하지만 함정은 **`serde`가 `Cow<str>` 필드를 기본적으로 `Owned`로, 즉 복사해서 역직렬화한다**는 데 있습니다. 직접 측정해 보면 분명합니다.
+
+```rust
+use serde::Deserialize;
+use std::borrow::Cow;
+
+#[derive(Debug, Deserialize)]
+struct WithoutBorrow<'a> {
+    msg: Cow<'a, str>, // 🚨 'a를 달았지만 serde는 이 필드를 빌리지 않는다
+}
+
+#[derive(Debug, Deserialize)]
+struct WithBorrow<'a> {
+    #[serde(borrow)] // ✅ 이 어트리뷰트가 있어야 입력에서 빌린다
+    msg: Cow<'a, str>,
+}
+
+fn variant(label: &str, c: &Cow<str>) {
+    match c {
+        Cow::Borrowed(_) => println!("{label}: Borrowed (제로카피)"),
+        Cow::Owned(_) => println!("{label}: Owned (복사 발생)"),
+    }
+}
+
+fn main() {
+    let raw = String::from(r#"{"msg":"disk full"}"#);
+    let a: WithoutBorrow = serde_json::from_str(&raw).unwrap();
+    variant("borrow 없음", &a.msg);
+    let b: WithBorrow = serde_json::from_str(&raw).unwrap();
+    variant("borrow 있음", &b.msg);
+}
+```
+
+```text
+borrow 없음: Owned (복사 발생)
+borrow 있음: Borrowed (제로카피)
+```
+
+수명 매개변수 `'a`를 달았으니 빌릴 거라 기대했지만, `borrow` 어트리뷰트 없이는 `Cow`가 조용히 힙 할당을 일으킵니다. 타입은 컴파일되고 런타임 에러도 없으니, **벤치마크를 돌리기 전까지는 자신이 복사하고 있다는 사실조차 모릅니다.** 이것이 "가짜 제로카피"입니다 — 코드는 제로카피처럼 *생겼지만* 실제로는 매 호출마다 복사하는 상태.
+
+> 💡 **Under the Hood — `&str` 필드는 왜 어트리뷰트 없이도 빌렸는가?**
+>
+> 앞 예제(`LogEntry { level: &str, message: &str }`)는 `#[serde(borrow)]` 없이도 빌렸는데, 왜 `Cow`는 명시가 필요할까요? `serde_derive`는 필드 타입이 **순수 참조(`&str`, `&[u8]`)이고** 구조체에 수명 매개변수가 하나뿐일 때는 자동으로 그 수명에서 빌리도록 추론합니다. 반면 `Cow<'a, str>`처럼 *내부에 수명을 품은 일반 타입*은 "이 수명으로 빌려라"라고 명시(`#[serde(borrow)]`)해 주지 않으면, serde는 안전한 기본값인 `DeserializeOwned`(=`Owned`)을 택합니다. 즉 Chapter 5/6의 대여 규칙과 동일한 보수성입니다 — 컴파일러도 serde도, **확실하지 않으면 소유(복사)를 택한다.** 이것을 모르면 `&str` 두 개짜리 구조체에서 빌림에 성공한 경험이, `Cow`나 중첩 타입에서 그대로 통할 거라는 잘못된 일반화로 이어집니다.
+
+그리고 진짜 제로카피에는 대가가 따릅니다 — 빌린 구조체는 입력 버퍼보다 오래 살 수 없으므로, 함수 밖으로 반환하려는 순간 컴파일러가 막습니다.
+
+```rust
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct LogEntry<'a> {
+    level: &'a str,
+    message: &'a str,
+}
+
+fn parse_log() -> LogEntry<'static> {
+    let raw = String::from(r#"{"level":"ERROR","message":"disk full"}"#);
+    serde_json::from_str(&raw).unwrap() // 🚨 raw를 빌린 값을 반환하려 함
+}
+
+fn main() {
+    let entry = parse_log();
+    println!("{:?}", entry);
+}
+```
+
+```text
+error[E0515]: cannot return value referencing local variable `raw`
+  --> src/main.rs:12:5
+   |
+12 |     serde_json::from_str(&raw).unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^^----^^^^^^^^^^
+   |     |                    |
+   |     |                    `raw` is borrowed here
+   |     returns a value referencing data owned by the current function
+```
+
+`E0515`는 Chapter 6의 댕글링 참조 방지가 데이터 모델에 그대로 작동하는 모습입니다. 제로카피 구조체를 함수 경계 밖으로 내보내려면 입력 버퍼(`raw`)도 함께 호출자가 소유하게 만들어야 합니다. 이 제약이 거추장스럽다면, 그것이 바로 "이 데이터는 빌릴 게 아니라 소유해야 한다(`String`)"는 신호입니다. 정리하면 **제로카피는 (1) `&str`/`&[u8]` 또는 `#[serde(borrow)] Cow`로 명시하고, (2) 입력 버퍼의 수명 안에서만 쓰며, (3) 이스케이프가 없을 때만** 성립합니다. 셋 중 하나라도 어긋나면 소유 타입으로 돌아가는 것이 정직합니다.
 
 ### `Debug`, `Clone`, `PartialEq`는 거저 얻는가
 
@@ -634,6 +718,52 @@ fn main() {
 ```
 
 각 derive가 무엇을 만드는지는 Chapter 9에서 트레이트로 깊이 다루지만, 데이터 모델링 단계에서 알아둘 핵심은 이것입니다. `#[derive(X)]`는 "이 구조체가 트레이트 `X`를 구현하는 코드를 컴파일러가 대신 작성하라"는 지시입니다. **공짜가 아니라 컴파일 타임에 생성되는 코드**이며, 런타임 비용은 그 트레이트의 실제 동작 비용(예: `Clone`은 실제 복제)뿐입니다. 그래서 의미 없는 derive를 남발하면 컴파일 시간만 늘 뿐입니다. 데이터 모델에는 보통 `Debug`(디버깅 필수), 필요시 `Clone`/`PartialEq`/`Default`/`Serialize`/`Deserialize` 정도를 선택적으로 답니다.
+
+### 💡 Under the Hood — `cargo expand`로 본 `#[derive(Serialize)]`: 리플렉션이 아니다
+
+Pydantic을 써 본 시니어라면 직렬화를 "객체의 필드를 런타임에 들여다보는(introspection) 작업"으로 떠올리기 쉽습니다. 실제로 파이썬의 `dataclasses.asdict`나 Pydantic의 검증은 `__annotations__`/`__fields__`를 런타임에 순회합니다 — 본질적으로 리플렉션입니다. Rust의 `#[derive(Serialize)]`는 **전혀 다릅니다.** 리플렉션이 아니라, *이 구조체에만 특화된 코드를 컴파일 타임에 찍어내는* 절차적 매크로(procedural macro)입니다. 눈으로 확인하는 가장 정확한 방법은 `cargo expand`(별도 설치: `cargo install cargo-expand`)로 매크로 전개 결과를 보는 것입니다.
+
+```rust
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+```
+
+이 코드를 `cargo expand`로 펼치면 다음이 생성됩니다(가독성을 위해 어트리뷰트 일부 생략).
+
+```rust
+#[automatically_derived]
+impl _serde::Serialize for Point {
+    fn serialize<__S>(&self, __serializer: __S)
+        -> _serde::__private::Result<__S::Ok, __S::Error>
+    where __S: _serde::Serializer {
+        let mut __serde_state = _serde::Serializer::serialize_struct(
+            __serializer,
+            "Point",
+            false as usize + 1 + 1, // 필드 개수를 컴파일 타임에 계산: 2
+        )?;
+        _serde::ser::SerializeStruct::serialize_field(
+            &mut __serde_state, "x", &self.x, // 필드명 "x"가 문자열 상수로 박힘
+        )?;
+        _serde::ser::SerializeStruct::serialize_field(
+            &mut __serde_state, "y", &self.y,
+        )?;
+        _serde::ser::SerializeStruct::end(__serde_state)
+    }
+}
+```
+
+이 전개 결과에서 세 가지를 읽어내면 serde의 성능 비밀이 전부 드러납니다.
+
+1. **필드명이 런타임 조회가 아니라 컴파일 타임 문자열 상수.** `"x"`, `"y"`가 코드에 그대로 박혀 있습니다. 직렬화 도중 `HashMap`이나 `__dict__`를 뒤지는 일이 없습니다.
+2. **필드 개수가 컴파일 타임 상수.** `false as usize + 1 + 1`은 컴파일러가 `2`로 접어버립니다(상수 폴딩). 런타임에 필드 수를 세지 않습니다.
+3. **각 필드 접근이 `&self.x`라는 정적 오프셋 접근.** 7.1에서 본 그 "베이스 주소 + 오프셋" 한 줄짜리 접근이며, `serialize_field`는 단일형화(Monomorphization)되어 인라인 후보가 됩니다.
+
+핵심은 `impl Serialize for Point`가 **`Point`라는 구체 타입에만 존재하는, 손으로 짠 것과 동일한 코드**라는 점입니다. 제네릭 `T`를 런타임에 들여다보는 코드가 아니라, 타입마다 따로 찍힌 전용 함수입니다 — 이것이 무비용 추상화(Zero-cost Abstraction)의 또 다른 얼굴입니다. `#[derive]`가 보일러플레이트를 대신 써 줄 뿐, 결과물의 성능은 직접 짠 직렬화 코드와 같습니다. 7.8 벤치마크에서 serde가 stdlib `json`을 압도하는 근본 원인이 바로 이 "리플렉션 없음"입니다.
 
 ---
 
@@ -708,7 +838,7 @@ Item        = 56 bytes
 
 이론은 충분합니다. 실제 수치를 봅시다. 동일한 JSON(필드 5개, 태그 배열 포함)을 100만 번 역직렬화/직렬화한 결과입니다.
 
-**측정 환경:** Apple Silicon, 100만 회 반복, Rust는 `cargo run --release`(최적화 빌드), Python 3.13. JSON 페이로드:
+**측정 환경:** Apple Silicon, 100만 회 반복, Rust는 `cargo run --release`(최적화 빌드), Python 3.13.6. JSON 페이로드:
 `{"id":1,"name":"Mechanical Keyboard","price":129.99,"tags":["electronics","input","mechanical"],"in_stock":true}`
 
 | 작업 | serde_json (`--release`) | Python `json` (stdlib) | Pydantic v2.11 |
@@ -732,7 +862,107 @@ Item        = 56 bytes
 
 ---
 
-## 7.9 Best Practices & 흔한 함정
+## 7.9 흔한 함정: `f64`로 가격을 표현하지 마라 — `rust_decimal`
+
+데이터 모델에서 가장 조용하고 가장 비싼 실수가 있습니다. 결제 금액, 잔고, 환율 같은 **돈을 `f64`로 표현하는 것**입니다. 파이썬에서도 같은 함정이 있지만(`float`), 파이썬 개발자는 보통 `Decimal`로 도망칠 줄 압니다. 그런데 Rust로 넘어오면 7.6의 `Item { price: f64 }`처럼 무심코 `f64`를 쓰게 되고, 그 순간 정밀도 폭탄을 심는 셈입니다. 이건 Rust의 문제가 아니라 **IEEE 754 부동소수점의 본질**입니다 — `0.1`이나 `19.99`는 이진 부동소수점으로 *정확히* 표현되지 않습니다.
+
+```rust
+fn main() {
+    let a: f64 = 0.1;
+    let b: f64 = 0.2;
+    println!("{:.17}", a + b);        // 0.30000000000000004
+    println!("{}", (a + b) == 0.3);   // false
+
+    // 더 무서운 누적 오차: 0.10원을 1000번 더하면?
+    let mut sum = 0.0_f64;
+    for _ in 0..1000 {
+        sum += 0.10;
+    }
+    println!("{:.17}", sum);          // 99.99999999999859313 (기대: 100.0)
+}
+```
+
+마지막 줄을 보세요. `0.10`을 1,000번 더하면 `100.0`이 아니라 `99.99999999999859`가 나옵니다. 결제 정산 배치가 이런 누적 합을 100만 건 돌린다고 상상해 보세요 — 회계가 1원씩 어긋나기 시작하고, 그 원인을 추적하는 데 며칠이 날아갑니다. 게다가 `==` 비교가 `false`라는 사실은, "총액이 0원인지" 같은 분기마저 신뢰할 수 없게 만듭니다.
+
+해법은 파이썬의 `decimal.Decimal`과 정확히 대응하는 **`rust_decimal` 크레이트**입니다. 십진 소수를 이진 근사 없이 정확히 표현하는 128비트 고정소수점 타입(`Decimal`, `size_of` 측정값 **16 bytes**)을 제공합니다.
+
+```toml
+[dependencies]
+rust_decimal = { version = "1", features = ["serde-with-str"] }
+rust_decimal_macros = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+```
+
+```rust
+use rust_decimal::Decimal;
+use rust_decimal_macros::dec; // 컴파일 타임에 리터럴을 Decimal로
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Order {
+    // 💡 JSON에는 문자열로 직렬화하여 정밀도를 보존 (부동소수점 왕복 회피)
+    #[serde(with = "rust_decimal::serde::str")]
+    price: Decimal,
+    qty: u32,
+}
+
+fn main() {
+    let da = dec!(0.1);
+    let db = dec!(0.2);
+    println!("{}", da + db);            // 0.3 (정확!)
+    println!("{}", (da + db) == dec!(0.3)); // true
+
+    let mut sum = Decimal::ZERO;
+    for _ in 0..1000 {
+        sum += dec!(0.10);
+    }
+    println!("{}", sum);                // 100.00 (정확!)
+
+    // serde 왕복: 문자열로 직렬화 → 정밀도 손실 0
+    let order = Order { price: Decimal::from_str("19.99").unwrap(), qty: 3 };
+    let json = serde_json::to_string(&order).unwrap();
+    println!("{json}");                 // {"price":"19.99","qty":3}
+    let back: Order = serde_json::from_str(&json).unwrap();
+    println!("{}", back.price);         // 19.99 (그대로 복원)
+}
+```
+
+> 💡 **Under the Hood — 왜 JSON에 숫자가 아니라 문자열로 넣는가**
+>
+> `#[serde(with = "rust_decimal::serde::str")]`가 `price`를 `"19.99"`라는 **문자열**로 직렬화하는 데에는 이유가 있습니다. JSON 숫자 리터럴(`19.99`)은 명세상 어떻게 파싱될지 보장이 없고, 많은 파서가 이를 `f64`로 받습니다 — 그러면 `Decimal`로 정확히 보존한 값이 JSON 경계를 넘는 순간 다시 이진 부동소수점 오차에 노출됩니다. 문자열로 직렬화하면 십진 표현이 **비트 단위로 보존**되어, 시스템 간 왕복(round-trip)에서도 `19.99`가 정확히 `19.99`로 돌아옵니다. 이것이 Stripe·PayPal을 비롯한 결제 API가 금액을 문자열(또는 최소 단위 정수, 예: 센트)로 주고받는 이유입니다. 대안으로 "센트 단위 `i64`"를 쓰는 정수 전략도 있는데, 통화 단위가 고정이고 분할 계산이 단순할 때 가장 빠르고 안전합니다. `rust_decimal`은 통화/세율/환율처럼 *임의 정밀도의 십진 연산*이 필요할 때 선택합니다.
+
+정리하면, 데이터 모델에서 금액 필드를 만날 때의 판단 기준은 이렇습니다 — **표시·연산이 단순하고 단위가 고정이면 최소 단위 정수(`i64` 센트), 십진 정밀도와 반올림 규칙이 중요하면 `rust_decimal::Decimal`. `f64`는 과학 계산처럼 근사 오차가 허용되는 경우에만.** 7.6의 `Price(f64)` 뉴타입 예제도 실무라면 `Price(Decimal)`로 두는 편이 정직합니다.
+
+---
+
+## 7.10 비교표: `dataclass` vs `Pydantic` vs `struct + serde`
+
+지금까지 흩어져 있던 세 가지 데이터 모델링 방식을 한자리에 모아 비교합니다. 파이썬 진영의 두 표준(`dataclass`, `Pydantic`)과 Rust의 `struct + serde`를 같은 축으로 놓고 보면, 각 도구가 무엇을 *언제* 해 주는지가 선명해집니다.
+
+| 축 | `@dataclass` | `Pydantic v2` | Rust `struct + serde` |
+|---|---|---|---|
+| 타입 검사 시점 | 없음 (힌트는 무시됨) | **런타임** (객체 생성마다) | **컴파일 타임** (타입 불일치는 빌드 실패) |
+| JSON 검증 | 수동 (`__post_init__` 등) | 런타임 검증기 (`pydantic-core`, Rust) | `serde`가 컴파일 타임 생성한 코드로 파싱 |
+| 검증 메커니즘 | — | 리플렉션(`__fields__` 순회) | **단일형화된 전용 코드** (리플렉션 없음) |
+| 동적 속성 추가 | 허용 (`__slots__` 없으면) | 기본 금지 (`model_config`로 제어) | **컴파일 에러** (E0560/E0609) |
+| 3필드 인스턴스 메모리\* | 헤더 48 + dict 296 = **344 B** | 인스턴스 72 + dict 184 = **256 B** | `id`/`name`/`price` 연속 배치, 헤더 0 B |
+| 값 검증(`price > 0`) | 직접 `if`/예외 | `Field(gt=0)` 선언적 | 타입(`NonZeroU32`)/검증 생성자(`TryFrom`) |
+| 검증 실패 표현 | `raise ValueError` | `ValidationError` 예외 | `Result<T, E>` (타입에 명시, 무시 불가) |
+| 역직렬화 속도\*\* | (직접 구현) | 964 ns/op | **170 ns/op** |
+| "잘못된 값"의 운명 | 객체로 존재 가능 | 생성 시 거부 | **타입이 존재 자체를 막음** (parse, don't validate) |
+
+\* 3.13.6에서 `id: int, name: str, price: float` 모델을 `sys.getsizeof`로 측정. dataclass의 `__dict__`는 갓 만든 3필드 인스턴스 기준 296 B, Pydantic v2.11.7 인스턴스는 자체 72 B + `__dict__` 184 B. 두 경우 모두 필드가 가리키는 `int`/`str`/`float` 객체는 별도(7.1의 344 vs 428 논의와 동일한 기준).
+\*\* 7.8의 측정값(100만 회, `--release`) 재인용.
+
+이 표가 드러내는 본질적 차이는 마지막 두 줄입니다. 파이썬의 두 방식은 모두 "객체를 일단 만들 수 있고, 그것이 유효한지는 별도로 묻는다"는 구조입니다 — `dataclass`는 아예 묻지 않고, `Pydantic`은 생성 시점에 한 번 묻습니다. 반면 Rust는 7.6에서 본 뉴타입·검증 생성자로 **"유효하지 않은 값은 타입으로서 존재할 수 없게"** 만듭니다. `Pydantic`이 "런타임에 강력한 검증"이라면, Rust는 "검증을 통과한 사실을 타입에 영구히 새기는" 접근입니다. 둘 다 정당한 전략이지만, 후자는 검증을 한 번만 하고 이후 코드 전체에서 다시 확인할 필요가 없다는 결정적 이점이 있습니다.
+
+실무 선택 기준도 분명합니다. **빠른 스크립트·내부 도구라면 `dataclass`**(검증 불요), **외부 입력을 받는 파이썬 API 경계라면 `Pydantic`**(런타임 검증이 곧 방어선), **성능·정확성이 핵심인 서비스/파이프라인이라면 `struct + serde`**(컴파일 타임에 끝내고 런타임 비용 0). 그리고 Chapter 22에서 보겠지만, 파이썬 API 경계에서 `Pydantic`을 쓰면서 그 *코어*를 PyO3로 Rust에 내려보내는 하이브리드가 현실의 정답인 경우가 많습니다.
+
+---
+
+## 7.11 Best Practices & 흔한 함정
 
 지금까지의 내용을 실무 체크리스트로 정리합니다.
 
@@ -770,7 +1000,9 @@ fn main() {
 
 **함정 4 — 디버그 빌드로 벤치마크하기.** 7.8에서 강조했듯, `cargo run`(디버그)으로 측정하면 serde가 느립니다. **반드시 `--release`.** 이 실수 하나로 "Rust 별로네"라는 잘못된 결론에 도달하는 사람이 많습니다.
 
-**함정 5 — `String` vs `&str`을 구조체에서 혼동하기.** 구조체 필드로 `&str`(참조)을 두면 Chapter 6의 수명 매개변수가 따라붙어 복잡해집니다(`struct Item<'a> { name: &'a str }`). 데이터 모델은 보통 데이터를 **소유**해야 하므로, 특별한 이유(제로카피 파싱 등)가 없다면 필드는 `String`/`Vec<T>` 같은 소유 타입으로 두세요. 참조 필드는 "이 구조체가 다른 데이터의 뷰일 때"만 정당합니다.
+**함정 5 — `String` vs `&str`을 구조체에서 혼동하기.** 구조체 필드로 `&str`(참조)을 두면 Chapter 6의 수명 매개변수가 따라붙어 복잡해집니다(`struct Item<'a> { name: &'a str }`). 데이터 모델은 보통 데이터를 **소유**해야 하므로, 특별한 이유(제로카피 파싱 등)가 없다면 필드는 `String`/`Vec<T>` 같은 소유 타입으로 두세요. 참조 필드는 "이 구조체가 다른 데이터의 뷰일 때"만 정당합니다. 그리고 `&str`/`Cow`로 제로카피를 노릴 때는 7.6의 `#[serde(borrow)]` 함정을 반드시 기억하세요 — 어트리뷰트 없이는 조용히 복사됩니다.
+
+**함정 6 — 돈을 `f64`로 표현하기.** 결제 금액·잔고·세율을 `f64`로 두는 순간 `0.10 × 1000 = 99.99999999999859`(7.9의 측정값) 같은 누적 오차가 회계를 어긋나게 합니다. 십진 정밀도가 필요하면 `rust_decimal::Decimal`, 단위가 고정이면 최소 단위 정수(`i64` 센트)를 쓰세요. `f64`는 근사 오차가 허용되는 과학 계산용입니다.
 
 ### 컴파일러 에러 시연 ②: 정의되지 않은 필드
 
@@ -811,6 +1043,107 @@ error[E0609]: no field `is_admin` on type `User`
 
 ---
 
+## 연습문제
+
+읽기만 해서는 손가락이 기억하지 못합니다. 아래 네 문제는 Rustlings 스타일로 — 빈 `cargo new` 프로젝트나 [Rust Playground](https://play.rust-lang.org/)에 손으로 코드를 쳐 가며 풀도록 설계했습니다. 각 문제 아래 '정답 스케치'에는 핵심 아이디어와 함께, 스스로 검증할 수 있는 **컴파일러 에러코드** 또는 **측정값**을 적어 두었습니다. 답을 보기 전에 먼저 컴파일러와 싸워 보세요 — 그게 이 책의 학습 방식입니다.
+
+### 문제 1 — '가짜 제로카피'를 직접 측정해 잡아내기
+
+다음 구조체는 수명 `'a`를 달고 `Cow<'a, str>` 필드를 가졌으니 제로카피처럼 *보입니다*. 하지만 실제로는 복사가 일어납니다. (1) 이 코드를 실행해 `kind`가 `Borrowed`인지 `Owned`인지 출력하도록 `match`를 작성하고, (2) 한 글자만 고쳐 진짜 제로카피로 만드세요.
+
+```rust
+use serde::Deserialize;
+use std::borrow::Cow;
+
+#[derive(Debug, Deserialize)]
+struct Event<'a> {
+    kind: Cow<'a, str>,
+}
+
+fn main() {
+    let raw = String::from(r#"{"kind":"click"}"#);
+    let e: Event = serde_json::from_str(&raw).unwrap();
+    // TODO: e.kind가 Borrowed인지 Owned인지 출력하라
+}
+```
+
+> **정답 스케치.** `match &e.kind { Cow::Borrowed(_) => ..., Cow::Owned(_) => ... }`로 판별합니다. 원본은 `Owned`(복사)를 출력합니다. 진짜 제로카피로 만들려면 필드에 `#[serde(borrow)]`를 답니다(7.6 참고).
+> ```rust
+> #[serde(borrow)]
+> kind: Cow<'a, str>,
+> ```
+> **자기검증:** 어트리뷰트를 달기 *전*엔 `Owned`, 단 *후*엔 `Borrowed`가 출력되면 성공. 단, 입력에 `\n` 같은 이스케이프가 있으면 디코딩이 필요해 `borrow`를 달아도 `Owned`로 떨어진다는 점까지 확인하면 만점입니다.
+
+### 문제 2 — Rust ↔ JSON 네이밍 컨벤션 맞추기
+
+Rust는 `snake_case`, JSON API는 보통 `camelCase`입니다. 아래 DTO를 직렬화하면 `{"userId":7,"displayName":"Ada"}`가 나오고, `avatar_url`이 `None`일 때는 **출력에서 아예 빠지도록** 어트리뷰트를 채우세요. 직접 함수를 추가로 쓰지 말고 `#[serde(...)]`만 사용합니다.
+
+```rust
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct UserDto {
+    user_id: u64,
+    display_name: String,
+    avatar_url: Option<String>,
+}
+```
+
+> **정답 스케치.** 구조체에 `#[serde(rename_all = "camelCase")]`, `avatar_url`에 `#[serde(skip_serializing_if = "Option::is_none")]`를 답니다(7.6 대응표 참고).
+> **자기검증:** `serde_json::to_string`의 출력을 `assert_eq!`로 박아 두면 회귀 테스트가 됩니다.
+> ```rust
+> assert_eq!(json, r#"{"userId":7,"displayName":"Ada"}"#); // None이면 avatarUrl 키 없음
+> ```
+
+### 문제 3 — "만들어질 수 없는 잘못된 값" (parse, don't validate)
+
+"비어 있지 않은 이름"만 담는 뉴타입 `NonEmptyName`을 설계하세요. 공백뿐인 문자열(`"   "`)도 거부해야 합니다. 검증을 통과한 값만 생성되도록 `TryFrom<String>`을 구현하고, 검증 실패는 예외가 아니라 `Result`로 표현합니다.
+
+```rust
+use std::convert::TryFrom;
+
+struct NonEmptyName(String);
+
+// TODO: impl TryFrom<String> for NonEmptyName
+```
+
+> **정답 스케치.** `try_from`에서 `s.trim().is_empty()`면 `Err`, 아니면 `Ok(NonEmptyName(s))`를 반환합니다.
+> ```rust
+> impl TryFrom<String> for NonEmptyName {
+>     type Error = String;
+>     fn try_from(s: String) -> Result<Self, Self::Error> {
+>         if s.trim().is_empty() { Err("empty".into()) } else { Ok(NonEmptyName(s)) }
+>     }
+> }
+> ```
+> **자기검증:** `NonEmptyName::try_from("ok".to_string()).is_ok()`는 `true`, `NonEmptyName::try_from("   ".to_string()).is_err()`도 `true`. 더 나아가 `Deserialize`를 손수 구현해(7.6의 `Price` 예제처럼) JSON 역직렬화 시점에도 검증이 걸리게 하면 실무 수준입니다.
+
+### 문제 4 — `f64`가 거짓말하는 순간을 재현하고 고치기
+
+다음 코드는 `0.10`을 1,000번 더합니다. (1) 실행해 출력이 `100.0`이 아님을 직접 확인하고, (2) `rust_decimal`로 바꿔 정확히 `100.00`이 나오게 하세요.
+
+```rust
+fn main() {
+    let mut sum = 0.0_f64;
+    for _ in 0..1000 {
+        sum += 0.10;
+    }
+    println!("{:.17}", sum); // ??? 
+}
+```
+
+> **정답 스케치.** `f64` 버전의 출력은 `99.99999999999859313`입니다(직접 측정값). `Decimal`로 바꾸면:
+> ```rust
+> use rust_decimal::Decimal;
+> use rust_decimal_macros::dec;
+> let mut sum = Decimal::ZERO;
+> for _ in 0..1000 { sum += dec!(0.10); }
+> println!("{}", sum); // 100.00
+> ```
+> **자기검증:** `f64`에서는 `(0.1 + 0.2) == 0.3`이 `false`, `Decimal`에서는 `(dec!(0.1) + dec!(0.2)) == dec!(0.3)`이 `true`. 추가로 `Decimal`을 `serde`로 직렬화할 때 `#[serde(with = "rust_decimal::serde::str")]`를 달면 JSON에 `"19.99"`처럼 **문자열**로 나가 왕복 정밀도가 보존됩니다(7.9 참고).
+
+---
+
 이번 장에서 우리는 파이썬 클래스의 정체가 비싼 `__dict__` 해시 테이블이었음을 메모리 바이트로 확인했고, 그것을 객체 헤더 없이 연속 배치되는 Rust `struct`로 옮겼습니다. `__init__` 대신 연관 함수 `new`를, `@property` 대신 모듈 경계와 검증 생성자를, `dataclass`의 기본값 대신 `Default` 트레이트와 구조체 갱신 문법을 손에 넣었습니다. 무엇보다 `Pydantic`의 런타임 검증을, 컴파일 타임에 코드를 생성하는 `serde`와 "유효하지 않으면 만들어질 수 없는" 뉴타입 타입으로 대체하며 — 검증을 코드가 아니라 타입에 새기는 사고방식을 배웠습니다. Chapter 4~6의 소유권·대여·수명이 이 모든 곳에서 일관되게 작동하는 것도 다시 확인했습니다.
 
 하지만 우리는 아직 데이터를 *조합*하는 법은 다루지 않았습니다. 파이썬 개발자가 가장 버리기 힘들어하는 OOP의 유산, **상속(Inheritance)**은 어디로 갔을까요? 다음 장(Chapter 8)에서는 Rust가 의도적으로 상속을 배제한 이유와, 그 빈자리를 채우는 **컴포지션(Composition)**과 **뉴타입 패턴(Newtype Pattern)** — 이번 장 7.6에서 맛본 그 `Price(f64)`의 본격적인 활용 — 을 살펴봅니다. "바나나를 원했는데 고릴라와 정글을 얻는" 상속의 함정에서, Rust가 어떻게 우리를 구해내는지 확인할 차례입니다.
@@ -825,3 +1158,6 @@ error[E0609]: no field `is_admin` on type `User`
 - https://doc.rust-lang.org/rust-by-example/custom_types/structs.html
 - https://serde.rs/
 - https://docs.rs/serde/latest/serde/
+- https://serde.rs/attributes.html
+- https://serde.rs/lifetimes.html
+- https://docs.rs/rust_decimal/latest/rust_decimal/

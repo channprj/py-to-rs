@@ -358,6 +358,37 @@ note: function defined here
 >
 > `UserId`는 메모리상에서 정확히 `u64`와 똑같은 8바이트입니다. 별도의 태그도, 박싱도, 포인터 간접 참조도 없습니다. 컴파일러는 단일형화(Monomorphization) 과정에서 뉴타입 래퍼를 **완전히 지워버립니다.** 생성된 기계어 수준에서 `fetch_user(UserId(42))`는 그냥 `fetch_user(42)`와 동일한 코드입니다. 타입 안전성은 100% 컴파일 타임의 약속이며, 런타임에는 그 흔적조차 남지 않습니다. 이것이 Rust가 말하는 **무비용 추상화(Zero-cost Abstraction)**의 교과서적 예시입니다. 파이썬에서 같은 안전성을 흉내내려면 `class UserId(int)` 서브클래싱이 필요한데, 그러면 모든 `UserId`가 별도의 PyObject(최소 28바이트 + 박싱)가 되어 *런타임 비용을 지불하고도* `+`나 비교 연산에서 평범한 `int`로 도로 떨어져 안전성이 새어 나갑니다. Rust는 비용 0으로 더 강한 보장을 줍니다.
 
+> 💡 **Under the Hood: `#[repr(transparent)]`와 FFI ABI**
+>
+> `size_of`가 같다는 것과 *ABI(호출 규약상 표현)가 같다*는 것은 다른 이야기입니다. 그냥 `struct UserId(u64)`는 크기가 8바이트인 건 맞지만, 컴파일러가 그 표현을 내부 `u64`와 동일하게 유지한다는 **보장은 없습니다**(단일 필드라 실질적으로는 같지만, 언어 차원의 약속은 아닙니다). C 함수에 뉴타입을 그대로 넘기는 FFI 경계에서는 이 보장이 결정적입니다(C FFI는 Chapter 21). 바로 이때 `#[repr(transparent)]`를 씁니다.
+>
+> ```rust
+> use std::mem::{align_of, size_of};
+>
+> // ABI 수준에서 내부 u64와 '완전히 동일한' 표현임을 언어가 보장한다
+> #[repr(transparent)]
+> #[derive(Debug, Clone, Copy)]
+> pub struct Handle(u64);
+>
+> // C ABI 함수가 u64를 받는다고 가정
+> extern "C" fn raw_consume(h: u64) -> u64 { h.wrapping_mul(2) }
+>
+> fn main() {
+>     println!("{} {}", size_of::<u64>(), align_of::<u64>());        // 8 8
+>     println!("{} {}", size_of::<Handle>(), align_of::<Handle>());  // 8 8
+>
+>     let h = Handle(21);
+>     println!("{}", raw_consume(h.0)); // 42
+>
+>     // u64는 니치(niche)가 없으므로(모든 비트패턴이 유효) Option 태그가 별도 공간을 먹는다
+>     println!("{}", size_of::<Option<Handle>>()); // 16, 8이 아님
+> }
+> ```
+>
+> `#[repr(transparent)]`는 "이 뉴타입은 레지스터·메모리·함수 인자 전달 방식까지 내부 타입과 한 글자도 다르지 않다"를 컴파일러에게 못 박습니다. 따라서 `extern "C"` 함수 시그니처에서 `u64` 자리에 `Handle`을 그대로 써도 ABI가 깨지지 않습니다 — 의미상 타입 안전성은 Rust 쪽에서 챙기면서, C 쪽에서는 그냥 `uint64_t`로 보입니다. 단일 필드(또는 영-크기 필드 + 단일 비-영 필드)에만 붙일 수 있다는 제약이 있습니다.
+>
+> 한 가지 주의: 위 출력에서 `Option<Handle>`이 8이 아니라 **16**인 이유는, `u64`에는 "사용되지 않는 비트패턴(니치)"이 없어서 `None`을 표현할 여분의 값이 없기 때문입니다. `Option<&T>`나 `Option<Box<T>>`가 8바이트로 압축되는 니치 최적화(Chapter 7에서 본)는 0이라는 무효 포인터값을 `None`에 빌려 쓸 수 있을 때만 성립합니다. `repr(transparent)`는 이 니치 특성까지 그대로 전달하므로, *내부 타입이 니치를 가지면 뉴타입도 그 최적화를 물려받습니다*. 표현을 정직하게 위임한다는 것의 의미가 여기까지 닿습니다.
+
 ### 단위(Unit)를 타입으로: 화성 기후 궤도선의 교훈
 
 1999년 NASA의 화성 기후 궤도선은 한 팀이 야드파운드법(파운드힘·초)으로, 다른 팀이 미터법(뉴턴·초)으로 추력 데이터를 주고받다가 단위 변환 누락으로 추락했습니다. 두 값 모두 평범한 `float`였기에 타입 시스템이 막아줄 수 없었습니다. 뉴타입은 바로 이 부류의 버그를 박멸합니다.
@@ -392,6 +423,70 @@ fn main() {
 ```
 
 `Celsius`와 `Fahrenheit`는 둘 다 메모리상 `f64`(8바이트) 그 자체이지만, 타입 시스템은 둘을 절대 섞지 못하게 합니다. 변환은 오직 `to_fahrenheit()` 같은 *명시적* 통로로만 일어납니다. 측정 단위, 통화(`Usd`/`Krw`), 좌표계(`ScreenPixels`/`WorldUnits`), 인코딩 상태(`RawHtml`/`SanitizedHtml`) 등 "값은 같은 원시 타입이지만 의미가 다른" 모든 도메인에서 이 패턴은 강력합니다.
+
+### 흔한 함정: f64 뉴타입에 `#[derive(Ord)]` (E0277)
+
+`Celsius` 값들을 온도순으로 정렬하고 싶어진 순간, 파이썬 습관이 있는 손은 반사적으로 `#[derive(Ord)]`를 추가하려 합니다. 파이썬에서는 `sorted([Celsius(20), Celsius(5)])`가 `__lt__`만 있으면 그냥 동작했으니까요. Rust에서는 다음과 같이 막힙니다.
+
+```rust
+// 🚨 컴파일 에러! f64에는 Eq도 Ord도 구현되어 있지 않다
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+pub struct Celsius(f64);
+```
+
+```text
+error[E0277]: the trait bound `f64: Eq` is not satisfied
+ --> ord_trap.rs:3:20
+  |
+2 | #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+  |                                                     -- in this derive macro expansion
+3 | pub struct Celsius(f64);
+  |                    ^^^ the trait `Eq` is not implemented for `f64`
+...
+error[E0277]: the trait bound `f64: Ord` is not satisfied
+ --> ord_trap.rs:3:20
+  |
+2 | #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Eq, Ord)]
+  |                                                         --- in this derive macro expansion
+3 | pub struct Celsius(f64);
+  |                    ^^^ the trait `Ord` is not implemented for `f64`
+```
+
+`derive(Ord)`는 모든 필드가 `Ord`여야 하는데 **`f64`는 `Ord`도 `Eq`도 구현하지 않습니다.** 왜일까요? `f64`에는 `NaN`이라는 악동이 있어 `NaN != NaN`이고 `NaN < x`도 `NaN > x`도 모두 `false`입니다. 즉 **전순서(total order)와 동등성(반사성)이 깨집니다.** Rust는 이 수학적 사실을 타입으로 인코딩했습니다 — `f64`는 *부분 순서(partial order)*인 `PartialOrd`/`PartialEq`만 구현하고, *전순서*를 요구하는 `Ord`/`Eq`는 의도적으로 구현하지 않습니다. 파이썬은 이 함정을 숨긴 채 `sorted([float('nan'), 1.0, 2.0])`이 입력 순서에 따라 *조용히 다른 결과*를 내도록 방치하지만, Rust는 컴파일 게이트에서 멈춰 세웁니다.
+
+그래서 `temps.sort()`도 같은 이유로 거부됩니다 — `sort()`가 `Ord`를 요구하기 때문입니다.
+
+```text
+error[E0277]: the trait bound `Celsius: Ord` is not satisfied
+ --> sort_trap.rs:6:11
+  |
+6 |     temps.sort();
+  |           ^^^^ the trait `Ord` is not implemented for `Celsius`
+  |
+note: required by a bound in `slice::<impl [T]>::sort`
+```
+
+해법은 "어떤 순서를 원하는지 명시"하는 것입니다. `Eq`/`Ord`는 빼고 `PartialOrd`만 둔 채, 정렬은 비교 함수를 직접 건넵니다.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Celsius(f64);
+
+fn main() {
+    let mut temps = vec![Celsius(20.0), Celsius(5.0), Celsius(36.5), Celsius(f64::NAN)];
+
+    // 해법 1: 부분 순서(partial_cmp)로 정렬하되 NaN 처리를 직접 결정한다
+    temps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    println!("{temps:?}"); // [Celsius(5.0), Celsius(20.0), Celsius(36.5), Celsius(NaN)]
+
+    // 해법 2: f64::total_cmp 로 NaN까지 포함한 전순서를 '명시적으로' 부여한다
+    let mut t2 = vec![Celsius(20.0), Celsius(5.0), Celsius(36.5), Celsius(f64::NAN)];
+    t2.sort_by(|a, b| a.0.total_cmp(&b.0));
+    println!("{t2:?}"); // [Celsius(5.0), Celsius(20.0), Celsius(36.5), Celsius(NaN)]
+}
+```
+
+핵심 교훈: **정수 뉴타입(`UserId(u64)`)에는 `#[derive(Ord)]`가 잘 동작하지만, 부동소수점을 보유한 뉴타입에는 `Ord`가 따라오지 않습니다.** 정렬·`BTreeMap` 키·`max()` 등 전순서가 필요한 곳에서는 `sort_by(... total_cmp ...)`로 *NaN을 어떻게 다룰지 직접 선택*해야 합니다. 부동소수점 정렬을 자주 한다면 `ordered-float` 크레이트의 `OrderedFloat`/`NotNan` 타입이 바로 이 뉴타입을 표준화해 `Ord`까지 제공합니다.
 
 ### Deref와 Deref Coercion: 위임을 자동화하기 (주의 필요)
 
@@ -453,7 +548,11 @@ fn main() {
 }
 ```
 
-`Meters`에 `sqrt()`가 호출 가능한 것은 도메인 의미상 난센스입니다. `Deref`로 모든 것을 노출하면 뉴타입을 만든 이유(불변식 보호, 의미 있는 API만 노출)가 사라집니다. **Clippy도 이를 경고합니다(`clippy::should_implement_trait` 계열).** 경험칙은 이렇습니다.
+`Meters`에 `sqrt()`가 호출 가능한 것은 도메인 의미상 난센스입니다. `Deref`로 모든 것을 노출하면 뉴타입을 만든 이유(불변식 보호, 의미 있는 API만 노출)가 사라집니다.
+
+> 🚨 **사실 확인(정정):** "이 `Deref` 남용을 Clippy가 경고한다"는 통념이 있지만, **거짓입니다.** 위 `Meters` 코드를 `cargo clippy`로 검사하면(기본 린트는 물론 `-W clippy::pedantic`까지 켜도) **경고가 단 하나도 나오지 않습니다**(rustc/clippy 1.90.0에서 직접 확인). 이름이 비슷한 `clippy::should_implement_trait`는 *전혀 다른 상황*을 잡습니다 — "표준 트레이트 메서드와 같은 이름의 *고유(inherent) 메서드*"를 만들었을 때입니다. 예컨대 `impl Foo { pub fn add(self, other: Foo) -> Foo { ... } }`처럼 `std::ops::Add::add`와 충돌하는 이름의 공개 메서드를 두면, clippy가 `method 'add' can be confused for the standard trait method 'std::ops::Add::add'`라고 경고합니다. 즉 `should_implement_trait`는 `Deref` 오용 탐지기가 아닙니다. **`Deref`를 도메인 뉴타입에 거는 것은 Clippy가 막아주지 않는, 오롯이 설계 규율의 영역입니다.** 도구가 잡아주리라 기대하지 말고, 다음 경험칙을 손으로 지키세요.
+
+경험칙은 이렇습니다.
 
 - 뉴타입이 *진짜로* "내부 타입의 얇은 래퍼"이고 거의 모든 인터페이스를 그대로 제공해야 한다면(예: 스마트 포인터) → `Deref`.
 - 뉴타입이 *제한된 도메인 개념*(이메일, 미터, 유저 ID)이라면 → `Deref` 대신 필요한 메서드만 명시적으로 `as_str()`, `value()` 등으로 노출하거나, `AsRef<str>`만 구현.
@@ -506,6 +605,60 @@ fn main() {
 ```
 
 `Wallet`은 `balance`와 `balance_mut`만 구현했는데, `deposit`과 `deposit_all`을 공짜로 얻었습니다. 파이썬의 상속과 무엇이 다를까요? 결정적 차이는 **명시성과 충돌 처리**입니다. 두 트레이트가 같은 이름의 기본 메서드를 제공하고 한 타입이 둘 다 구현하면, Rust는 **컴파일 에러**를 내어 어느 쪽을 쓸지 명시(`<Wallet as Balance>::deposit(...)`)하라고 강제합니다. 파이썬의 MRO처럼 "조용히 왼쪽 우선"으로 넘어가지 않습니다. 모호함은 런타임 버그가 아니라 컴파일 에러가 됩니다.
+
+### 컴파일러 에러 시연: 메서드 모호성 (E0034)
+
+말로만 하면 와닿지 않으니 실제로 부딪쳐 봅시다. 8.1의 다이아몬드 문제를 트레이트로 옮긴 형태입니다 — `Html`과 `Json` 두 트레이트가 모두 `render`를 정의하고, `Widget`이 둘 다 구현합니다.
+
+```rust
+trait Html { fn render(&self) -> String; }
+trait Json { fn render(&self) -> String; }
+
+struct Widget;
+impl Html for Widget { fn render(&self) -> String { "<html/>".to_string() } }
+impl Json for Widget { fn render(&self) -> String { "{}".to_string() } }
+
+fn main() {
+    let w = Widget;
+    // 🚨 컴파일 에러! Html::render 인가 Json::render 인가?
+    println!("{}", w.render());
+}
+```
+
+`rustc`의 응답은 파이썬의 MRO처럼 *조용히 하나를 고르는* 대신, 두 후보를 나란히 펼쳐 보이며 손을 듭니다.
+
+```text
+error[E0034]: multiple applicable items in scope
+  --> e0034.rs:11:22
+   |
+11 |     println!("{}", w.render());
+   |                      ^^^^^^ multiple `render` found
+   |
+note: candidate #1 is defined in an impl of the trait `Html` for the type `Widget`
+note: candidate #2 is defined in an impl of the trait `Json` for the type `Widget`
+help: disambiguate the method for candidate #1
+   |
+11 -     println!("{}", w.render());
+11 +     println!("{}", Html::render(&w));
+   |
+help: disambiguate the method for candidate #2
+   |
+11 -     println!("{}", w.render());
+11 +     println!("{}", Json::render(&w));
+   |
+```
+
+`error[E0034]: multiple applicable items in scope`. 이것이 파이썬 다이아몬드 문제(8.1)에 대한 Rust의 답입니다. 파이썬에서 `Widget().render()`는 MRO상 `HtmlMixin`을 *말없이* 골라 `<html>...`을 반환하고, 그 선택이 왜 그렇게 됐는지는 C3 선형화 알고리즘을 머릿속으로 돌려야 알 수 있었습니다. Rust는 같은 상황에서 멈춰 서서 "후보가 둘인데 너의 의도를 모르겠다"고 말하고, 심지어 **고쳐 쓸 두 가지 정답(`Html::render(&w)` / `Json::render(&w)`)을 직접 제시**합니다. 해소는 **완전 정규화 문법(Fully Qualified Syntax)**으로 합니다.
+
+```rust
+fn main() {
+    let w = Widget;
+    println!("{}", Html::render(&w));            // <html/>
+    println!("{}", <Widget as Json>::render(&w)); // {}
+}
+```
+
+어느 트레이트의 메서드를 호출할지가 코드에 명시되어, 6개월 뒤 이 코드를 읽는 사람도 MRO를 추론할 필요가 없습니다. *모호함을 런타임 동작이 아니라 컴파일 에러로 환원*하는 것 — 이 챕터가 반복해 온 주제가 메서드 디스패치에서도 그대로 작동합니다.
 
 > **Under the Hood: MRO 런타임 탐색 vs 트레이트 정적 해소**
 >
@@ -810,6 +963,73 @@ fn main() {
 
 ---
 
+## 8.9 연습문제
+
+머리로 이해한 것과 손으로 쓸 수 있는 것은 다릅니다. 아래 세 문제를 *먼저 직접 풀어 본 뒤* 정답 스케치와 대조하세요. 각 문제에는 스스로 검증할 수 있는 컴파일러 에러 코드 또는 측정값을 달아 두었습니다. Rustlings처럼, 컴파일러를 채점관 삼아 빨간 줄이 사라질 때까지 고치면 됩니다.
+
+**문제 1 — 상속을 컴포지션으로 (Composition)**
+
+파이썬의 다음 상속 코드를 Rust의 컴포지션 + 명시적 위임으로 옮기세요. `Car`는 `Engine`을 *상속*하지 않고 *소유*해야 하며, `start()`만 외부에 노출하고 엔진의 다른 메서드는 새어 나오지 않아야 합니다.
+
+```python
+class Engine:
+    def __init__(self, horsepower: int) -> None:
+        self.horsepower = horsepower
+    def start(self) -> str:
+        return f"engine roaring at {self.horsepower}hp"
+
+class Car(Engine):                      # ← 이 상속을 없애라
+    def __init__(self, model: str, hp: int) -> None:
+        super().__init__(hp)
+        self.model = model
+```
+
+> **정답 스케치.** 핵심 아이디어는 `struct Car { engine: Engine, model: String }`(has-a)와, `Car::start`가 `self.engine.start()`를 *명시적으로* 위임하는 것입니다. `Engine`의 필드를 `pub`으로 열지 말고 `Engine::new`로만 만들게 하면 캡슐화가 유지됩니다.
+>
+> ```rust
+> pub struct Car { engine: Engine, model: String }
+> impl Car {
+>     pub fn new(model: &str, hp: u32) -> Self {
+>         Self { engine: Engine::new(hp), model: model.to_string() }
+>     }
+>     pub fn start(&self) -> String {
+>         format!("[{}] {}", self.model, self.engine.start())
+>     }
+> }
+> ```
+>
+> **자기검증:** `Car`에서 위임 메서드를 *지우고* `car.start()`를 호출해 보세요. 상속이 아니므로 `Engine::start`가 자동으로 따라오지 않아 `error[E0599]: no method named 'start' found for struct 'Car'`가 떠야 정상입니다. 위임을 다시 넣으면 출력은 `[RustMobile] engine roaring at 320hp`.
+
+**문제 2 — 검증 뉴타입 + 의도한 연산만 (Newtype)**
+
+음수가 될 수 없는 금액 타입 `Cents`를 만드세요. (a) 생성 시 음수면 `Err`를 반환하고, (b) `Cents + Cents`는 허용하되 (c) `Cents * Cents`는 *컴파일조차 안 되게* 두세요. 내부 필드는 비공개여야 합니다.
+
+> **정답 스케치.** `pub struct Cents(i64)`의 필드를 비공개로 두고, `Cents::new(v) -> Result<Self, String>`에서 `v < 0`을 거릅니다. `+`는 도메인상 의미가 있으니 `impl std::ops::Add for Cents`만 구현하고, `*`는 의미가 없으니 **구현하지 않습니다.** 연산자를 자동으로 물려받지 않는 것이 뉴타입의 *기능*입니다(8.8 함정 2).
+>
+> ```rust
+> impl std::ops::Add for Cents {
+>     type Output = Cents;
+>     fn add(self, rhs: Cents) -> Cents { Cents(self.0 + rhs.0) }
+> }
+> ```
+>
+> **자기검증:** `Cents::new(150)? + Cents::new(250)?`의 `.value()`는 **400**이어야 합니다. `Cents::new(-1).is_err()`는 `true`. 그리고 `a * b`를 시도하면 `error[E0369]: cannot multiply 'Cents' by 'Cents'`가 떠야 합니다(8.8의 `E0369`와 동일 계열). 만약 `derive`에 `Ord`를 넣고 싶어졌다면 — `i64`는 `Ord`라 통과하지만, 내부 타입을 `f64`로 바꾸는 순간 8.4에서 본 `error[E0277]: the trait bound 'f64: Ord' is not satisfied`로 막힙니다.
+
+**문제 3 — `Deref`를 쓸 곳과 쓰지 말 곳 (Deref)**
+
+두 타입을 설계하세요. (a) `OwnedBuffer(Vec<u8>)`는 바이트 슬라이스의 거의 모든 API를 그대로 노출해야 하는 "얇은 래퍼"입니다. (b) `EmailAddress(String)`은 검증 불변식을 가진 도메인 개념입니다. 각각에 `Deref`를 걸지 말지 *결정*하고, 그 근거를 코드로 보이세요.
+
+> **정답 스케치.** (a)는 스마트 포인터에 가까우므로 `impl Deref for OwnedBuffer { type Target = [u8]; ... }`이 정당합니다 — `buf.len()`, `buf.iter()` 등이 자동으로 동작합니다. (b)는 8.4의 교훈대로 `Deref`를 **걸지 않습니다.** 대신 `impl AsRef<str>`과 명시 메서드 `as_str()`만 둡니다. 그래야 `email.to_uppercase()` 같은 무의미한 호출이 *컴파일되지 않아* 불변식이 보호됩니다.
+>
+> ```rust
+> fn print_len(s: impl AsRef<str>) { println!("{}", s.as_ref().len()); }
+> // print_len(&email)은 OK. 하지만 email.to_uppercase()는 컴파일 에러.
+> ```
+>
+> **자기검증:** `EmailAddress`에 `Deref` 없이 `email.to_uppercase()`를 호출하면 `error[E0599]: no method named 'to_uppercase' found for struct 'EmailAddress'`가 떠야 정상입니다. 반대로 `OwnedBuffer`에 `Deref`를 걸면 `buf.len()`이 동작하고 `vec![1,2,3]` 버퍼에 대해 **3**을 반환합니다. 만약 `EmailAddress`에도 `Deref`를 걸어 버리면 컴파일은 통과하지만 — 그 순간 `str`의 200여 메서드가 전부 새어 나와 뉴타입을 만든 의미가 사라집니다. clippy는 이를 잡아주지 *않으니*(8.4 정정 박스), 이 선택은 순전히 여러분의 설계 규율에 달려 있습니다.
+
+---
+
 Chapter 7에서 우리는 `dataclass`와 Pydantic 모델을 `struct`로 옮기며 데이터의 *형태*를 모델링했습니다. 이번 챕터에서는 그 위에 얹혀 있던 OOP의 가장 무거운 유산 — **상속** — 을 내려놓고, 데이터의 재사용은 **컴포지션**으로, 행동의 공유는 **트레이트**로 분리하는 사고방식을 익혔습니다. 핵심은 하나입니다: Rust는 "is-a"의 암묵적 결합을 거부하고, "has-a"와 "can-do"의 명시적 조립을 택했으며, 그 대가로 취약한 기반 클래스·MRO 모호함·런타임 탐색 비용을 모두 컴파일 타임에 제거했습니다.
 
 이번 챕터에서 트레이트는 "행동 공유의 도구"로만 살짝 다뤘습니다. 하지만 트레이트는 그보다 훨씬 강력합니다. 파이썬 클래스의 진짜 마법인 **던더 메서드(`__str__`, `__add__`, `__eq__` ...)**, 즉 덕 타이핑의 근간이 Rust에서 어떻게 표준 트레이트(`Display`, `Add`, `PartialEq`)로 옮겨지며, 그것이 어떻게 컴파일 타임에 강제되는지 — 바로 다음 **Chapter 9. 매직 메서드(Dunder)에서 Trait으로**에서 본격적으로 파헤치겠습니다.
@@ -823,3 +1043,7 @@ Chapter 7에서 우리는 `dataclass`와 Pydantic 모델을 `struct`로 옮기�
 - https://doc.rust-lang.org/book/ch20-03-advanced-traits.html
 - https://doc.rust-lang.org/rust-by-example/generics/new_types.html
 - https://doc.rust-lang.org/rust-by-example/trait.html
+- https://doc.rust-lang.org/nomicon/other-reprs.html#reprtransparent
+- https://doc.rust-lang.org/std/primitive.f64.html#method.total_cmp
+- https://rust-lang.github.io/rust-clippy/master/index.html#should_implement_trait
+- https://docs.rs/ordered-float/latest/ordered_float/

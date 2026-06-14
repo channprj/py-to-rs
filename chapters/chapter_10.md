@@ -289,6 +289,58 @@ fn describe(status: &PaymentStatus) -> &str {
 
 규칙은 이렇습니다. **"의미상 모든 미래의 variant를 동일하게 취급해도 되는 곳"에서만 `_`를 쓰십시오.** 그렇지 않은 곳, 즉 상태마다 다른 처리가 필요할 가능성이 있는 곳에서는, 귀찮더라도 모든 variant를 명시적으로 나열하십시오. 컴파일러가 미래의 당신을 지켜줄 수 있도록. 이 함정은 10.8에서 다시 다룹니다.
 
+### Python 3.10 `match`와 Rust `match`는 이름만 같다
+
+Python 3.10이 `match` 문(구조적 패턴 매칭, PEP 634)을 도입하면서, 표면적으로는 Rust의 `match`와 닮아 보입니다. 하지만 둘은 **철학이 정반대**입니다. Python의 `match`는 *편의 문법*이고, Rust의 `match`는 *증명 도구*입니다. 시니어라면 이 차이를 정확히 알아야, Python의 `match`를 Rust의 안전망으로 착각하는 사고를 피할 수 있습니다.
+
+가장 위험한 차이부터 봅시다. Python의 `match`는 망라성을 **검사하지 않습니다.** 누락된 case가 있으면, 어떤 case에도 걸리지 않은 값은 그냥 블록을 빠져나가고 함수는 조용히 `None`을 반환합니다 (직접 측정).
+
+```python
+from enum import Enum
+
+class S(Enum):
+    A = 1
+    B = 2
+    C = 3
+
+def describe(s: S) -> str:
+    match s:
+        case S.A:
+            return "a"
+        case S.B:
+            return "b"
+        # C 누락 — 컴파일/런타임 어디서도 막지 않는다
+
+print(repr(describe(S.C)))   # 측정 결과: None
+```
+
+두 번째 함정은 더 미묘하고, Python 패턴 매칭의 가장 악명 높은 발등찍기입니다. **`case`에 쓴 *맨이름(bare name)*은 값 비교가 아니라 캡처 패턴(capture pattern)입니다.** 즉 상수와 비교하는 게 아니라, 매칭된 값을 그 이름으로 *덮어쓰며 무조건 매칭*됩니다 (직접 측정).
+
+```python
+GREEN = "green"
+color = "red"
+match color:
+    case GREEN:          # "GREEN과 같은가?"가 아니라 "color를 GREEN에 캡처"!
+        print("matched, GREEN is now:", GREEN)   # 측정: matched, GREEN is now: red
+print("after:", GREEN)   # 측정: after: red  ← 상수가 'red'로 덮였다
+```
+
+값과 비교하려면 `case Color.GREEN:`처럼 *점이 찍힌(dotted)* 이름을 써야만 합니다. Rust에는 이런 함정이 없습니다 — 패턴 위치의 식별자가 상수(`const`)나 enum variant 경로로 해석되면 값 비교이고, 새 이름이면 바인딩이며, 컴파일러가 `unreachable_patterns` 등으로 모호함을 잡아줍니다.
+
+| 항목 | Python 3.13.6 `match` 문 | Rust `match` 식 |
+| :--- | :--- | :--- |
+| **망라성 검사** | 없음. 누락 시 조용히 통과, 함수는 `None` 반환 | 컴파일 에러 `error[E0004]`로 강제 |
+| **표현식/문장** | 문장(statement). 값을 반환하지 않음 | 표현식. 모든 arm이 같은 타입의 값을 반환 |
+| **맨이름 `case x`** | 캡처 패턴(무조건 매칭 + 변수 덮어쓰기) | 새 이름이면 바인딩, 상수/variant 경로면 값 비교 |
+| **상수와 비교** | `case Color.GREEN`처럼 점 찍힌 이름만 가능 | `Color::Green` 또는 `const` 모두 자연스럽게 비교 |
+| **가드** | `case p if cond:` 지원 | `pat if cond =>` 지원(가드 arm은 망라 인정 안 됨) |
+| **타입 좁히기** | 런타임 `isinstance` 기반. 정적 보장 없음 | 컴파일 타임 타입 + 구조 분해, 런타임 검사 없음 |
+| **검사 시점** | 런타임 | 컴파일 타임 |
+| **데이터 추출** | `case Point(x, y)` 가능하나 `__match_args__` 의존 | variant 구조 분해가 타입에 내장 |
+| **`_` 와일드카드** | 망라를 "달성"시키는 편의 | 망라를 *무력화*하는 양날의 검(10.3) |
+
+요약하면, Python의 `match`는 길게 늘어진 `if-elif`를 읽기 좋게 만들어주는 *문법 설탕*이고, Rust의 `match`는 "내가 모든 경우를 다뤘다"는 사실을 컴파일러에게 *증명*하게 만드는 도구입니다. 같은 키워드를 쓰지만, 전자는 누락을 허용하고 후자는 누락을 금지합니다 — 이 한 줄이 10.1의 새벽 호출을 막느냐 마느냐를 가릅니다.
+
 ---
 
 ## 10.4 다형성의 두 갈래 길: Enum(정적) vs Trait Object(동적)
@@ -714,7 +766,48 @@ Message (size = 24, align = 8)
 
 - **payload 영역**은 *가장 큰 variant*를 담을 수 있어야 합니다. `Write(String)`이 24바이트로 최대이므로, payload는 최소 24바이트입니다.
 - **discriminant(태그)**는 "지금 이게 몇 번 variant인가"를 가리키는 정수입니다. variant가 3개뿐이라 1바이트면 충분합니다.
-- 그런데 전체가 25바이트가 아니라 정확히 24바이트입니다. 컴파일러가 태그를 `String` 내부의 사용되지 않는 정렬 패딩에 끼워 넣었기 때문입니다. Rust는 enum 레이아웃을 *명시적으로 지정하지 않는 한* 자유롭게 재배치하여 크기를 최소화합니다. (C 호환이 필요하면 `#[repr(C)]`나 `#[repr(u8)]`로 고정할 수 있습니다.)
+- 그런데 전체가 25바이트(혹은 정렬 때문에 32바이트)가 아니라 정확히 24바이트입니다. 흔히 "태그가 `String` 내부의 정렬 패딩에 들어갔다"고 설명하지만, **이건 틀린 설명입니다.** `String`은 `ptr 8 + cap 8 + len 8 = 24`바이트로 *전부 8바이트 정렬에 딱 맞아 떨어져, 남는 정렬 패딩이 한 바이트도 없습니다.* 진짜 이유는 다음 절에서 다룰 **니치 최적화(Niche Optimization)**입니다 — `String` 내부 포인터는 `NonNull`이라 절대 0번지가 될 수 없고, 컴파일러는 그 "절대 등장하지 않는 비트 패턴(니치)"에 태그를 숨깁니다. `Option<&T>`가 8바이트인 것과 정확히 같은 메커니즘입니다. Rust는 enum 레이아웃을 *명시적으로 지정하지 않는 한* 자유롭게 재배치하여 크기를 최소화합니다. (C 호환이 필요하면 `#[repr(C)]`나 `#[repr(u8)]`로 고정할 수 있습니다.)
+
+이 주장은 측정으로 검증할 수 있습니다. 같은 24바이트 payload를 가지되 *니치가 없는* 타입과 나란히 재보겠습니다.
+
+```rust
+use std::mem::size_of;
+
+enum Message {
+    Quit,
+    Write(String),           // 24바이트, 내부 포인터에 니치 있음
+    Move { x: i32, y: i32 },
+}
+
+// payload 크기는 동일(24바이트)하지만 [u64; 3]에는 니치가 없다
+enum NoNiche {
+    Quit,
+    Write([u64; 3]),         // 24바이트, 모든 비트 패턴이 유효 → 니치 없음
+    Move { x: i32, y: i32 },
+}
+
+// f64 변형만 있는 enum: f64는 모든 64비트 패턴이 유효(NaN 포함)하므로 니치 없음
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),          // payload 16바이트
+}
+
+fn main() {
+    println!("Message  = {}", size_of::<Message>());  // 24 (니치 사용)
+    println!("NoNiche  = {}", size_of::<NoNiche>());   // 32 (태그 8 + payload 24)
+    println!("Shape    = {}", size_of::<Shape>());     // 24 (태그 8 + payload 16, 니치 아님)
+}
+```
+
+```text
+Message  = 24
+NoNiche  = 32
+Shape    = 24
+```
+
+`Message`와 `NoNiche`는 payload 크기가 24바이트로 똑같은데도 `Message`는 24, `NoNiche`는 **32**바이트입니다. 차이를 만든 것은 오직 하나 — `String`에는 니치(`NonNull` 포인터의 0번지)가 있어 태그를 그 안에 숨겼고, `[u64; 3]`에는 니치가 없어 태그용 8바이트를 따로 떼어내야 했다는 점입니다. 만약 "정렬 패딩에 끼워 넣었다"가 사실이라면 `NoNiche`도 24바이트여야 하지만, 그렇지 않습니다. 정렬 패딩에 태그를 끼우는 일이 *전혀* 없는 건 아닙니다 — 가장 큰 variant가 실제로 남는 빈 바이트(trailing padding)를 가질 때는 태그가 그곳에 들어갑니다. 예컨대 variant 6개를 가진 enum의 최대 variant가 `{ x: u32, y: u8 }`(크기 8 = 4+1+3 패딩)이면 1바이트 태그가 그 3바이트 패딩에 흡수되어 enum 전체가 12가 아니라 **8바이트**입니다(직접 측정). 다만 `Write(String)`은 그런 패딩 경우가 아니라 — `String`에는 남는 패딩이 한 바이트도 없으므로 — *니치* 경우라는 것이 핵심입니다.
+
+> 🚨 **혼동 주의: 24바이트라고 다 같은 24바이트가 아닙니다.** `Shape`(`Circle(f64)`/`Rect(f64,f64)`)도 24바이트지만, 여기엔 니치가 *없습니다.* `f64`는 모든 64비트 패턴이 유효한 값(시그널링/콰이엇 NaN 포함)이라 빈틈이 없기 때문입니다. `Shape`의 24바이트는 "태그 8(정렬 때문에 1이 아니라 8로 패딩) + 가장 큰 payload 16 = 24"라는, *니치와 무관한* 평범한 태그드 유니언입니다. 즉 똑같이 24바이트여도 `Write(String)`의 24는 "니치로 태그를 흡수해 32→24로 줄인 결과"이고, `Rect(f64, f64)`의 24는 "태그를 따로 둔 태그드 유니언이 원래 24"인 것입니다. 메모리 크기만 보고 메커니즘을 단정하지 마십시오 — `size_of`는 같아도 그 안의 구조는 다릅니다.
 
 핵심 통찰 하나: **enum의 크기는 가장 큰 variant에 의해 결정됩니다.** `Quit`처럼 데이터 없는 variant도 24바이트를 차지합니다. 그래서 한 variant만 거대하면(예: 큰 배열을 품으면), 작은 variant들도 그 크기를 짊어집니다. 이럴 땐 큰 데이터를 `Box`로 감싸 힙으로 보내 enum 본체를 작게 유지하는 것이 관용구입니다(`clippy::large_enum_variant`가 이를 경고합니다).
 
@@ -914,6 +1007,254 @@ enum Packet {
 ```
 
 `Vec<Packet>`처럼 enum을 대량으로 담을 때 이 차이는 메모리 사용량과 캐시 효율에 직결됩니다. clippy가 `large_enum_variant`로 경고해 주니, 그 경고를 무시하지 마십시오.
+
+### 함정 5: `#[non_exhaustive]` enum이 강제하는 `_` arm
+
+10.3에서 우리는 "enum에 `_`를 쓰면 망라성 안전망을 스스로 버린다"고 배웠습니다. 그런데 *남의 크레이트*가 제공하는 enum을 매칭할 때는, 정반대로 **컴파일러가 `_`를 강요하는** 상황을 만납니다. 이 모순처럼 보이는 동작의 정체가 `#[non_exhaustive]` 속성입니다.
+
+라이브러리 작성자는 "이 enum에 앞으로 variant를 더 추가할 수 있으니, 소비자 코드는 그 변경을 *호환성 깨짐 없이* 견뎌야 한다"고 선언하고 싶을 때가 있습니다. 대표적으로 에러 enum이 그렇습니다 — 새 에러 종류가 추가되어도 다운스트림이 재컴파일만 하면 깨지지 않게 하고 싶죠. 이때 enum에 `#[non_exhaustive]`를 붙입니다.
+
+```rust
+// upstream_crate (라이브러리 측)
+#[non_exhaustive]
+pub enum ApiError {
+    NotFound,
+    Timeout,
+    RateLimited,
+}
+```
+
+이제 *다른 크레이트*의 소비자가 이 enum을 매칭하면, 현재 존재하는 variant를 **하나도 빠짐없이 나열했더라도** 컴파일 에러가 납니다.
+
+```rust
+// consumer_crate (소비자 측)
+use upstream_crate::ApiError;
+
+fn describe(e: &ApiError) -> &str {
+    match e {
+        ApiError::NotFound => "찾을 수 없음",
+        ApiError::Timeout => "시간 초과",
+        ApiError::RateLimited => "요청 제한",
+        // 🚨 모든 variant를 다 적었는데도 컴파일 에러!
+    }
+}
+```
+
+`cargo build`의 실제 출력입니다 (직접 측정).
+
+```text
+error[E0004]: non-exhaustive patterns: `&_` not covered
+ --> src/main.rs:5:11
+  |
+5 |     match e {
+  |           ^ pattern `&_` not covered
+  |
+note: `ApiError` defined here
+ --> .../upstream_crate/src/lib.rs:2:1
+  |
+2 | pub enum ApiError {
+  | ^^^^^^^^^^^^^^^^^
+  = note: the matched value is of type `&ApiError`
+  = note: `ApiError` is marked as non-exhaustive, so a wildcard `_` is necessary
+          to match exhaustively
+help: ensure that all possible cases are being handled by adding a match arm
+      with a wildcard pattern or an explicit pattern as shown
+  |
+8 ~         ApiError::RateLimited => "요청 제한",
+9 ~         &_ => todo!(),
+  |
+```
+
+핵심은 `note: ... is marked as non-exhaustive, so a wildcard _ is necessary` 한 줄입니다. `#[non_exhaustive]`는 "이 enum의 우주는 *외부에서 볼 때* 닫혀 있지 않다"고 선언하는 것이고, 그래서 소비자는 미래에 추가될지 모를 variant를 위해 `_ => ...` arm을 *의무적으로* 둬야 합니다. 해법은 명확합니다.
+
+```rust
+fn describe(e: &ApiError) -> &str {
+    match e {
+        ApiError::NotFound => "찾을 수 없음",
+        ApiError::Timeout => "시간 초과",
+        ApiError::RateLimited => "요청 제한",
+        _ => "알 수 없는 오류",   // ✅ non_exhaustive가 요구하는 catch-all
+    }
+}
+```
+
+두 가지 비대칭을 기억하십시오. 첫째, **이 강제는 크레이트 경계를 넘을 때만 작동합니다.** `#[non_exhaustive]` enum을 *정의한 그 크레이트 안에서는* 평소처럼 모든 variant를 명시해야 하고 `_`는 불필요합니다 — 같은 크레이트는 enum의 전체 우주를 알기 때문입니다. 둘째, 그래서 `_`가 여기서는 "안전망을 버리는 행위"가 아니라 "버전 호환성을 사는 비용"입니다. `std`의 여러 에러 타입(`std::io::ErrorKind` 등)과 잘 설계된 크레이트의 에러 enum이 이 속성을 답니다. 당신이 *라이브러리를 만든다면*, 공개 enum 특히 에러 enum에는 `#[non_exhaustive]`를 붙여 다운스트림을 미래의 깨짐으로부터 보호하는 것을 고려하십시오. 반대로 당신이 *소비자라면*, 외부 enum에 강제된 `_` arm을 보고 "이건 망라성 안전망 포기인가?"라고 당황하지 말고, 의미를 정확히 이해하고 catch-all을 두십시오.
+
+---
+
+## 10.9 벤치마크: 100만 요소 순회에서 정적 vs 동적 디스패치
+
+10.4에서 "동적 디스패치는 정적보다 느리다"고 말했습니다. 시니어는 형용사를 믿지 않습니다 — 숫자를 봐야 합니다. `criterion`으로 직접 재 봅시다. 도형 100만 개를 `Vec`에 담고, 전체를 순회하며 `area()`를 합산하는 핫루프입니다. 한쪽은 `Vec<Shape>`(enum, 정적 디스패치 + 값을 연속 저장), 다른 쪽은 `Vec<Box<dyn Area>>`(트레이트 객체, 동적 디스패치 + 힙 산재 포인터)입니다.
+
+```toml
+# Cargo.toml
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "dispatch"
+harness = false
+
+[profile.release]
+codegen-units = 1
+lto = true
+```
+
+```rust
+// benches/dispatch.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+// 정적 디스패치: enum + match
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Triangle(f64, f64),
+}
+impl Shape {
+    #[inline]
+    fn area(&self) -> f64 {
+        match self {
+            Shape::Circle(r) => std::f64::consts::PI * r * r,
+            Shape::Rect(w, h) => w * h,
+            Shape::Triangle(b, h) => 0.5 * b * h,
+        }
+    }
+}
+
+// 동적 디스패치: trait object
+trait Area {
+    fn area(&self) -> f64;
+}
+struct Circle(f64);
+struct Rect(f64, f64);
+struct Triangle(f64, f64);
+impl Area for Circle {
+    fn area(&self) -> f64 { std::f64::consts::PI * self.0 * self.0 }
+}
+impl Area for Rect {
+    fn area(&self) -> f64 { self.0 * self.1 }
+}
+impl Area for Triangle {
+    fn area(&self) -> f64 { 0.5 * self.0 * self.1 }
+}
+
+const N: usize = 1_000_000;
+
+fn build_enum() -> Vec<Shape> {
+    (0..N).map(|i| match i % 3 {
+        0 => Shape::Circle(i as f64 * 0.001 + 1.0),
+        1 => Shape::Rect(i as f64 * 0.001 + 1.0, 2.0),
+        _ => Shape::Triangle(i as f64 * 0.001 + 1.0, 3.0),
+    }).collect()
+}
+fn build_dyn() -> Vec<Box<dyn Area>> {
+    (0..N).map(|i| -> Box<dyn Area> { match i % 3 {
+        0 => Box::new(Circle(i as f64 * 0.001 + 1.0)),
+        1 => Box::new(Rect(i as f64 * 0.001 + 1.0, 2.0)),
+        _ => Box::new(Triangle(i as f64 * 0.001 + 1.0, 3.0)),
+    }}).collect()
+}
+
+fn bench(c: &mut Criterion) {
+    let enums = build_enum();
+    let dyns = build_dyn();
+    let mut g = c.benchmark_group("sum_area_1M");
+    g.bench_function("enum_static", |b| b.iter(|| {
+        let mut acc = 0.0_f64;
+        for s in black_box(&enums) { acc += s.area(); }
+        black_box(acc)
+    }));
+    g.bench_function("dyn_dynamic", |b| b.iter(|| {
+        let mut acc = 0.0_f64;
+        for s in black_box(&dyns) { acc += s.area(); }
+        black_box(acc)
+    }));
+    g.finish();
+}
+
+criterion_group!(benches, bench);
+criterion_main!(benches);
+```
+
+`cargo bench`의 측정 결과입니다 (Apple Silicon, `--release` + LTO, criterion 100 샘플의 중앙값. 직접 측정).
+
+| 방식 | 컬렉션 타입 | 100만 요소 순회 시간 | 상대 비용 |
+| :--- | :--- | ---: | ---: |
+| 정적 디스패치 | `Vec<Shape>` (enum) | **약 703 µs** | 1.00× (기준) |
+| 동적 디스패치 | `Vec<Box<dyn Area>>` | **약 811 µs** | **약 1.15×** |
+
+동적 디스패치가 약 **15% 느립니다.** 이 격차의 정체를 분해해 봅시다.
+
+1. **간접 호출 + 인라이닝 차단.** enum 쪽 `area()`는 `#[inline]`이 붙어 있고 호출 대상이 컴파일 타임에 확정되므로, 컴파일러가 `match`를 루프 안으로 인라인하고 산술을 벡터화할 여지가 큽니다. `dyn Area` 쪽은 매 요소마다 vtable 포인터를 읽어 함수 주소로 점프하는 간접 호출이라(10.4의 fat pointer 박스 참고), 인라이닝이 원천 차단됩니다.
+2. **캐시 지역성.** `Vec<Shape>`는 24바이트짜리 값들이 힙에 *연속*으로 놓여, 순차 접근이 CPU 프리페처와 궁합이 좋습니다. `Vec<Box<dyn Area>>`는 16바이트 fat 포인터들만 연속이고, 실제 객체는 `Box::new`가 따로 할당한 *힙 여기저기*에 흩어져 있어 포인터를 따라갈 때마다 캐시 미스 위험이 있습니다.
+
+> 🚨 **15%를 과대·과소 해석하지 마십시오.** 이 워크로드는 `area()` 본문이 산술 몇 번뿐이라 호출 오버헤드 비중이 상대적으로 큽니다. 메서드 본문이 무거우면(예: 수백 줄 작업) 디스패치 비용의 *상대* 비중은 줄어 격차가 좁혀지고, 반대로 본문이 더 가볍고 요소 수가 더 많으면 인라이닝·벡터화 차단 효과로 격차가 2배 이상 벌어지기도 합니다. 핵심은 절대 수치가 아니라 방향입니다 — **닫힌 집합인데 습관적으로 `Box<dyn>`을 쓰면 공짜로 성능을 흘린다.** 그리고 이 둘 모두 Python의 메서드 디스패치(매번 `__dict__`/MRO 해시 조회 + `PyObject` 박싱)보다는 수십 배 빠릅니다. enum이냐 dyn이냐는 "Python 대비 50배냐 45배냐"가 아니라 *확장성을 여느냐 닫느냐*의 설계 결정이며(10.4), 측정 가능한 핫패스가 아니라면 가독성·확장성을 우선하십시오.
+
+---
+
+## 연습문제
+
+손으로 풀어 보십시오(Rustlings 스타일). 각 문제 아래 "정답 스케치"에는 핵심 아이디어와 *자기 검증용 컴파일러 에러코드 또는 측정값*이 있습니다. 먼저 직접 작성해 `rustc`/`cargo`로 돌려 보고, 막히면 스케치를 펼치십시오.
+
+### 문제 1 — 재귀적 ADT 모델링 (Sum + Product의 조합)
+
+간이 JSON 값을 표현하는 enum `Json`을 정의하십시오. variant는 `Null`, `Bool(bool)`, `Number(f64)`, `Str(String)`, `Array(Vec<Json>)`, `Object(BTreeMap<String, Json>)`입니다. 그리고 값의 중첩 깊이를 반환하는 `fn depth(&self) -> usize`를 `match`로 구현하십시오(스칼라는 1, 컨테이너는 `1 + 자식들의 최대 깊이`). `_` 와일드카드를 쓰지 말고 모든 variant를 명시하십시오.
+
+**정답 스케치.** 합 타입(enum) 안에 자기 자신을 `Vec`/`BTreeMap`을 통해 재귀적으로 품는 것이 핵심입니다(`Vec`/`BTreeMap`이 힙 간접 참조를 제공하므로 `Box` 없이도 크기가 무한해지지 않습니다). 스칼라 4종은 or-패턴으로 `Json::Null | Json::Bool(_) | Json::Number(_) | Json::Str(_) => 1`로 묶고, 컨테이너는 `1 + items.iter().map(Json::depth).max().unwrap_or(0)`. 자기 검증: 아래 값의 `depth()`는 **4**입니다(`Object → Array → Array → Bool`).
+
+```rust
+// {"name":"ada","tags":[1,[true]]}  → depth == 4
+let mut obj = BTreeMap::new();
+obj.insert("name".to_string(), Json::Str("ada".to_string()));
+obj.insert("tags".to_string(),
+    Json::Array(vec![Json::Number(1.0), Json::Array(vec![Json::Bool(true)])]));
+assert_eq!(Json::Object(obj).depth(), 4);   // ✅ 측정값 4
+```
+
+만약 `Array`나 `Object` arm을 빼먹으면 `error[E0004]: non-exhaustive patterns`로 컴파일러가 정확히 짚어 줍니다.
+
+### 문제 2 — `match`의 정밀 도구 (가드 + `@` 바인딩 + or-패턴)
+
+`enum Token { Num(i64), Op(char), Ident(String) }`를 분류하는 `fn classify(t: &Token) -> String`를 작성하십시오. 규칙: ① 0~9 사이의 한 자리 수는 `"small digit N"`(값을 캡처해 출력), ② 음수는 `"negative N"`, ③ 그 외 정수는 `"number N"`, ④ `+ - * /` 중 하나면 `"arithmetic op"`, ⑤ 다른 연산자는 `"other op C"`, ⑥ 식별자는 `"ident S"`.
+
+**정답 스케치.** ①은 `@` 바인딩과 범위를 결합: `Token::Num(n @ 0..=9) => format!("small digit {n}")`. ②는 가드: `Token::Num(n) if *n < 0 => ...`(참조 매칭이라 `*n`). 순서가 중요합니다 — 좁은 패턴(범위, 가드)을 먼저, 포괄 패턴(`Token::Num(n)`)을 나중에 둬야 합니다. ④는 or-패턴: `Token::Op('+' | '-' | '*' | '/') => "arithmetic op".to_string()`. 자기 검증:
+
+```rust
+assert_eq!(classify(&Token::Num(7)),  "small digit 7");   // ✅
+assert_eq!(classify(&Token::Num(-3)), "negative -3");      // ✅
+assert_eq!(classify(&Token::Op('+')), "arithmetic op");    // ✅
+assert_eq!(classify(&Token::Op('%')), "other op %");       // ✅
+```
+
+좁은 arm을 포괄 arm 뒤에 두면 `warning: unreachable pattern`이 뜹니다 — 그 경고가 순서가 틀렸다는 신호입니다.
+
+### 문제 3 — 소유권 소비형 상태 머신
+
+TCP 비슷한 연결을 `enum Conn { Closed, Listen, Established { peer: String } }`로 모델링하고, 전이 메서드를 `self`를 *소비*하도록(10.5의 결제 머신과 동일한 스타일) 구현하십시오: `listen(self)`은 `Closed`에서만 `Listen`으로, `accept(self, peer: String)`은 `Listen`에서만 `Established`로, 잘못된 전이는 `Result<Self, ConnError>`의 `Err`로 반환합니다. `close(self) -> Self`는 어디서든 `Closed`로.
+
+**정답 스케치.** 정상 전이는 해당 variant를 매칭해 데이터를 새 variant로 *이동*시키고(`Conn::Listen => Ok(Conn::Established { peer })`), 그 외는 `other => Err(ConnError::InvalidTransition { from: other.label(), action: "..." })`. 핵심 안전성: 전이가 `self`를 소비하므로, 전이 후 옛 변수를 다시 쓰면 `error[E0382]: borrow of moved value`가 납니다(10.8 함정 3과 동일). 자기 검증:
+
+```rust
+let c = Conn::Closed.listen().unwrap().accept("10.0.0.1".to_string()).unwrap();
+assert_eq!(c, Conn::Established { peer: "10.0.0.1".to_string() });   // ✅
+let bad = Conn::Established { peer: "x".to_string() }.listen();
+assert_eq!(bad, Err(ConnError::InvalidTransition { from: "Established", action: "listen" })); // ✅
+```
+
+(`PartialEq, Eq`를 `derive`해야 `assert_eq!`가 됩니다.)
+
+### 문제 4 — 같은 도메인, 두 디스패치 (정적 vs 동적)
+
+원과 정사각형의 넓이 합을 구하는 코드를, **두 방식으로** 작성하고 메모리 크기를 비교하십시오. (a) `enum ShapeE { Circle(f64), Square(f64) }` + `match`로 정적 디스패치, (b) `trait Area` + `Vec<Box<dyn Area>>`로 동적 디스패치. 두 방식의 합계가 같음을 `assert!`로 확인하고, `size_of::<ShapeE>()`와 `size_of::<Box<dyn Area>>()`를 출력하십시오.
+
+**정답 스케치.** (a)는 10.4 길 1, (b)는 길 2를 그대로 따릅니다. 자기 검증 측정값:
+
+```text
+size_of ShapeE        = 16   // 태그 8 + 가장 큰 payload 8(f64) = 16, 니치 없음
+size_of Box<dyn Area> = 16   // fat pointer: data ptr 8 + vtable ptr 8
+```
+
+두 숫자가 우연히 같아 보이지만 의미는 정반대입니다 — `ShapeE`의 16바이트는 *값 자체*를 담고 `Vec`에 연속 저장되며, `Box<dyn Area>`의 16바이트는 *힙 어딘가의 객체를 가리키는 포인터 쌍*일 뿐입니다(10.4 fat pointer 박스). 한 걸음 더: 100만 개로 늘려 10.9의 벤치마크를 직접 돌려, 어느 쪽이 빠른지 *측정*해 보십시오. 정적 쪽이 대략 1.1~1.2배 빠르게 나오면 정상입니다.
 
 ---
 

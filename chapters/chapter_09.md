@@ -108,7 +108,7 @@ impl std::ops::Add for Vector2D {
 | 호출 가능 | `__call__` | `Fn`/`FnMut`/`FnOnce` | 캡처 방식에 따라 3종으로 분화 |
 | 반복 | `__iter__`,`__next__` | `std::iter::Iterator` | Chapter 15에서 심화 |
 | 길이 | `__len__` | (관습) `fn len(&self)` | 표준 트레이트 아님, 관용 메서드 |
-| 컨텍스트 매니저 | `__enter__`,`__exit__` | `Drop` (RAII) | 스코프 종료 시 자동 호출, Chapter 4 연계 |
+| 컨텍스트 매니저 | `__enter__`,`__exit__` | `Drop` (RAII) | 스코프 종료 시 자동 호출, Chapter 4.5 연계 |
 | 타입 변환 | `__int__`,`__float__`,`__str__` | `From`/`Into`/`TryFrom` | 실패 가능 변환은 `TryFrom`으로 분리 |
 | 기본값 | (개념 없음, `__init__` 기본 인자) | `std::default::Default` | `#[derive(Default)]` 또는 수동 |
 
@@ -316,7 +316,59 @@ fn main() {
 >
 > `#[derive(Copy)]`를 붙인 `Vector2D`는 메모리에서 정확히 `[f64; 2]`와 동일합니다. 16바이트(8바이트 × 2)가 연속으로 놓이고, 정렬(alignment)은 8바이트입니다. 포인터도, 길이 필드도, 가상 메서드 테이블도 없습니다. 파이썬의 `Vector2D` 인스턴스가 PyObject 헤더(참조 카운트 + 타입 포인터, 64비트에서 최소 16바이트) + `__dict__`(속성 딕셔너리, 보통 수십~수백 바이트) + 박싱된 `float` 두 개(각각 별도 힙 할당된 PyObject)로 흩어져 있는 것과 대조적입니다.
 >
-> 더 중요한 것은 연산의 컴파일 결과입니다. `v1 + v2`는 `--release` 빌드에서 `Add::add` 함수 호출조차 남지 않습니다. 컴파일러가 함수를 인라인하고 두 번의 `addsd`(SSE2 배정밀도 덧셈) 명령으로 줄여버립니다. 즉 `v1 + v2`의 어셈블리는 손으로 쓴 `self.x + rhs.x; self.y + rhs.y`와 **바이트 단위로 동일**합니다. 이것이 무비용 추상화(Zero-cost Abstraction)의 실체입니다. 연산자 오버로딩이라는 고수준 문법을 쓰지만, 그 추상화의 대가가 런타임에 0입니다. CPython이 `v1 + v2`마다 `nb_add` 슬롯을 조회하고 새 PyObject를 힙에 할당하는 것과 비교하면, 같은 표기법이지만 완전히 다른 기계가 돌아갑니다.
+> 더 중요한 것은 연산의 컴파일 결과입니다. `v1 + v2`는 `--release` 빌드에서 `Add::add` 함수 호출조차 남지 않습니다. 컴파일러가 함수를 인라인하고 두 번의 배정밀도 덧셈 명령(x86이면 `addsd`, ARM이면 `fadd`)으로 줄여버립니다. 즉 `v1 + v2`의 어셈블리는 손으로 쓴 `self.x + rhs.x; self.y + rhs.y`와 **바이트 단위로 동일**합니다. 이것이 무비용 추상화(Zero-cost Abstraction)의 실체입니다. 연산자 오버로딩이라는 고수준 문법을 쓰지만, 그 추상화의 대가가 런타임에 0입니다. CPython이 `v1 + v2`마다 `nb_add` 슬롯을 조회하고 새 PyObject를 힙에 할당하는 것과 비교하면, 같은 표기법이지만 완전히 다른 기계가 돌아갑니다.
+
+### 벤치마크: 연산자 오버로딩은 정말 무비용인가
+
+"무비용"은 강한 주장입니다. 마케팅 문구가 아니라 측정으로 증명해야 합니다. `Vector2D` **1억 개**를 누적 덧셈하는 두 함수를 만들었습니다. 하나는 우리가 구현한 `+` 연산자(`Add::add`)를 경유하고, 다른 하나는 같은 일을 필드에 직접 손으로 씁니다.
+
+```rust
+// 경로 A: 연산자 오버로딩 (Add::add 경유)
+pub fn sum_via_operator(data: &[Vector2D]) -> Vector2D {
+    let mut acc = Vector2D::new(0.0, 0.0);
+    for &v in data {
+        acc = acc + v; // 우리가 정의한 Add 구현
+    }
+    acc
+}
+
+// 경로 B: 손으로 쓴 필드 산술 (추상화 없음)
+pub fn sum_via_fields(data: &[Vector2D]) -> Vector2D {
+    let (mut x, mut y) = (0.0, 0.0);
+    for v in data {
+        x += v.x;
+        y += v.y;
+    }
+    Vector2D::new(x, y)
+}
+```
+
+`criterion`(`cargo bench`, `--release`, `opt-level=3`, M-시리즈, 표본 10회)으로 측정한 결과입니다.
+
+```text
+입력: Vector2D 1억(100,000,000) 개
+vec2d_1e8_add/operator_overload   time: [64.37 ms  65.04 ms  65.78 ms]
+vec2d_1e8_add/manual_fields       time: [64.45 ms  64.91 ms  65.38 ms]
+비율: 1.002x  (측정 노이즈 범위 안 — 사실상 0% 차이)
+```
+
+두 값은 측정 오차 안에서 구별되지 않습니다. 연산자 오버로딩이 손으로 쓴 산술과 **같은 속도**라는 뜻입니다. 그런데 이건 "비슷하다"는 통계적 관찰일 뿐입니다. 더 강한 증거는 컴파일러가 실제로 무엇을 내뱉었는지를 보는 것입니다. 두 함수를 `--emit asm`으로 어셈블리까지 내려 비교해 봤습니다(Apple Silicon, NEON).
+
+```text
+sum_via_operator:                 sum_via_fields:
+    ...                               ...
+    ldp   q1, q2, [x11, #-32]         ldp   q1, q2, [x11, #-32]
+    ldp   q3, q4, [x11], #64          ldp   q3, q4, [x11], #64
+    fadd.2d v0, v0, v1                fadd.2d v0, v0, v1   ← 128비트 NEON 패킹 덧셈
+    fadd.2d v0, v0, v2                fadd.2d v0, v0, v2
+    fadd.2d v0, v0, v3                fadd.2d v0, v0, v3
+    fadd.2d v0, v0, v4                fadd.2d v0, v0, v4
+    ...                               ...
+```
+
+라벨 이름(`LBB0_` vs `LBB1_`)을 정규화하면 **두 함수 본문의 명령 스트림은 단 한 바이트도 다르지 않습니다.** 컴파일러는 `Add::add` 호출을 인라인하고, 루프를 4배 펼친 뒤(unroll), `fadd.2d`(한 명령으로 `f64` 두 개를 더하는 NEON 패킹 덧셈)로 벡터화했습니다. 즉 `acc + v`라는 고수준 표기와 `x += v.x; y += v.y`라는 저수준 표기가 기계어 단계에서 **물리적으로 같은 코드로 수렴**합니다. 이것이 "추상화의 대가가 0"이라는 말의 정확한 의미입니다 — 비유가 아니라 디스어셈블리로 확인되는 사실입니다.
+
+> 비교 관점: 같은 1억 회 덧셈을 순수 CPython에서 `Vector2D.__add__`로 돌리면, 매 반복마다 `nb_add` 슬롯 조회 + 두 개의 새 `float` PyObject 힙 할당 + 새 `Vector2D` 인스턴스 생성이 일어납니다. 단순 측정으로도 수십 초 규모이며, 위 65ms와 비교하면 세 자릿수 배수의 차이입니다. 표기법은 같은 `+`이지만, 한쪽은 SIMD 한 명령으로 두 성분을 동시에 더하고 다른 쪽은 객체 두 개를 힙에 새로 할당합니다.
 
 ---
 
@@ -514,6 +566,59 @@ fn main() {
 ```
 
 이것이 Chapter 8에서 본 "상속 다형성"의 Rust식 대체재입니다. 파이썬에서 `List[BaseShape]`에 자식 클래스 인스턴스를 섞어 담던 것을, Rust는 `Vec<Box<dyn Shape>>`로 표현합니다. Chapter 10에서 보겠지만, **닫힌 집합(고정된 타입 목록)**이라면 `dyn` 대신 `enum`이 더 빠르고 안전합니다. `dyn`은 "구현 타입을 미리 알 수 없는 열린 집합"(예: 플러그인)에 어울립니다.
+
+그런데 모든 트레이트를 `dyn`으로 만들 수 있는 것은 아닙니다. 파이썬에서는 어떤 클래스든 리스트에 던져 넣고 메서드를 호출할 수 있지만, Rust에는 `&dyn Trait`을 만들 수 있는 트레이트와 없는 트레이트가 구분됩니다. 이 경계가 **객체 안전성(Object Safety)**, 최근 Rust 용어로는 **dyn 호환성(dyn compatibility)**입니다.
+
+> **💡 Under the Hood: 객체 안전성(Object Safety)과 error[E0038] — vtable을 만들 수 없는 경우**
+>
+> `&dyn Shape`가 동작하는 비결은 9.6 앞에서 본 **vtable**입니다. 동적 디스패치는 "구체 타입을 모른 채 함수 포인터 배열(vtable)만 보고 메서드를 호출"합니다. 그런데 **vtable에 함수 포인터를 채울 수 없는 메서드**가 있으면, 그 트레이트로는 vtable 자체를 만들 수 없습니다. 그런 트레이트를 "객체 안전하지 않다(not dyn compatible)"고 부르고, `dyn`으로 쓰려는 순간 `error[E0038]`이 뜹니다.
+>
+> 대표적으로 두 가지가 vtable을 무너뜨립니다.
+>
+> **(1) `Self`를 반환하는 메서드.** vtable을 거치는 순간 구체 타입은 지워졌습니다(타입 소거, type erasure). `fn duplicate(&self) -> Self`는 "호출자가 결과의 크기를 알아야" 하는데, `dyn` 뒤에서는 `Self`가 `Circle`인지 `Rectangle`인지 알 수 없으니 반환값을 스택에 둘 수가 없습니다.
+>
+> ```rust
+> trait Cloneable {
+>     fn duplicate(&self) -> Self;  // 🚨 Self 반환
+>     fn name(&self) -> String;
+> }
+> fn store(items: Vec<Box<dyn Cloneable>>) {  // dyn 시도
+>     for it in &items { println!("{}", it.name()); }
+> }
+> ```
+>
+> `rustc` 1.96.0이 내뱉는 실제 메시지:
+>
+> ```text
+> error[E0038]: the trait `Cloneable` is not dyn compatible
+>  --> src/main.rs
+>   |
+>   | fn store(items: Vec<Box<dyn Cloneable>>) {
+>   |                         ^^^^^^^^^^^^^ `Cloneable` is not dyn compatible
+>   |
+> note: for a trait to be dyn compatible it needs to allow building a vtable
+>   |
+>   |     fn duplicate(&self) -> Self;
+>   |        ^^^^^^^^^ ...because method `duplicate` references the `Self`
+>   |                  type in its return type
+>   = help: consider moving `duplicate` to another trait
+> ```
+>
+> **(2) 제네릭 메서드.** `fn add_all<T: IntoIterator<Item=i64>>(&mut self, items: T)`처럼 메서드가 자체 타입 파라미터를 가지면, 단일형화 단계에서 `T`마다 별도 함수가 생깁니다. vtable은 **고정 크기 배열**인데 `T`의 가짓수는 무한하니, 슬롯을 미리 채울 수가 없습니다. 이때도 `error[E0038]: ...because method has generic type parameters`가 뜹니다.
+>
+> **해법은 컴파일러가 직접 알려줍니다** — "consider moving ... to another trait". 더 간편한 관용구는 문제 메서드에 `where Self: Sized`를 붙여 **vtable에서 그 메서드만 제외**하는 것입니다.
+>
+> ```rust
+> trait Cloneable {
+>     // Self를 반환하는 메서드는 vtable에 넣지 않음 → 트레이트는 다시 dyn 호환
+>     fn duplicate(&self) -> Self where Self: Sized;
+>     fn name(&self) -> String;   // 이 메서드는 dyn으로도 호출 가능
+> }
+> ```
+>
+> `dyn Cloneable` 뒤에서는 `duplicate`를 호출할 수 없지만(`Sized`가 아니므로), `name`은 멀쩡히 동적 디스패치됩니다. 표준 라이브러리의 `Iterator`가 정확히 이 기법을 씁니다 — `next`는 vtable에 있지만, `map`/`collect` 같은 제네릭 콤비네이터는 모두 `where Self: Sized`라 `dyn Iterator`에서는 못 쓰고 `next`만 쓸 수 있습니다.
+>
+> 파이썬에는 이런 제약이 없습니다. 어떤 객체든 던더만 있으면 동적 호출됩니다. 그 자유의 대가는, "리스트에 담아 순회하다가 어떤 객체에서만 메서드가 없어 런타임에 `AttributeError`"가 나는 부류의 버그입니다. Rust는 "이 트레이트는 애초에 동적 디스패치가 불가능하다"를 **타입 정의 시점에 E0038로** 못 박아, 그 버그 가능성 자체를 제거합니다.
 
 ### 벤치마크: 정적 vs 동적 디스패치
 
@@ -803,6 +908,221 @@ fn process<H: Handler>(handler: &H) { handler.run(); }
 **함정 4: `Display` 안에서 `?` 대신 `write!` 결과 무시.** `fmt` 함수는 `fmt::Result`를 반환해야 합니다. `write!(f, ...)`의 반환을 무시하지 말고 그대로 반환하거나 `?`로 전파하세요. 무시하면 버퍼가 가득 찼을 때의 에러를 놓칩니다.
 
 **함정 5: 연산자가 값을 소비하는 것을 잊음.** `impl Add for Vector2D`의 `add(self, rhs)`는 `self`와 `rhs`를 **이동(move)**시킵니다. `Copy`가 아닌 타입(예: `String` 필드를 가진 구조체)이라면 `a + b` 후 `a`를 다시 못 씁니다. 이때는 `impl Add<&Vector2D> for &Vector2D`처럼 참조에 대한 구현을 추가하거나 `Copy`를 derive하세요(우리 `Vector2D`는 `Copy`라 문제없습니다 — 이것이 9.4에서 `Copy`를 붙인 이유입니다).
+
+**함정 6: `Add` 4가지 값/참조 조합 폭발.** 함정 5를 정면으로 풀려다 보면 더 큰 함정이 기다립니다. `Copy`가 아닌 타입 `T`에 대해, 사용자는 `a + b`, `&a + b`, `a + &b`, `&a + &b`를 모두 자연스럽게 쓰고 싶어합니다. 그런데 `impl Add for T`(값+값) 하나만 있으면 나머지 세 조합은 컴파일되지 않습니다. 실제로 어떤 에러가 나는지 봅시다.
+
+```rust
+#[derive(Debug, Clone)]
+struct BigNum { digits: String }   // String 필드 → Copy 불가
+
+impl Add for BigNum {
+    type Output = BigNum;
+    fn add(self, rhs: BigNum) -> BigNum {
+        BigNum { digits: format!("{}+{}", self.digits, rhs.digits) }
+    }
+}
+
+fn main() {
+    let a = BigNum { digits: "1".into() };
+    let b = BigNum { digits: "2".into() };
+    let c = a + b;       // a, b 이동(move)됨
+    println!("{a:?}");   // 🚨 a는 이미 이동됨
+}
+```
+
+```text
+error[E0382]: borrow of moved value: `a`
+  --> src/main.rs
+   |
+   |     let c = a + b;
+   |             ----- `a` moved due to usage in operator
+   |     println!("{a:?}");
+   |               ^^^^^^^ value borrowed here after move
+   |
+note: calling this operator moves the left-hand side
+help: consider cloning the value if the performance cost is acceptable
+```
+
+컴파일러가 친절히 "이 연산자는 좌변을 이동시킨다"고 알려주고 `a.clone()`을 제안합니다. 하지만 매번 `clone()`을 박는 것은 무거운 타입(긴 `String`, 큰 `Vec`)에서 비싼 복사를 부릅니다. 그래서 값과 참조를 자유롭게 섞고 싶다면 **네 개의 `impl`을 다 써야** 합니다.
+
+```rust
+impl Add<BigNum>  for BigNum  { /* 값 + 값 */ }
+impl Add<&BigNum> for BigNum  { /* 값 + 참조 */ }
+impl Add<BigNum>  for &BigNum { /* 참조 + 값 */ }
+impl Add<&BigNum> for &BigNum { /* 참조 + 참조 */ }
+```
+
+연산자가 두 개(`Add`, `Sub`)면 8개, 세 개면 12개… 트레이트 수 × 4의 보일러플레이트 폭발입니다. **해법은 두 갈래입니다.**
+
+첫째, 타입이 작고 포인터를 안 담으면 그냥 `#[derive(Copy)]` 하세요. `Copy` 타입은 `a + b`가 좌변을 **복사**하므로 `a`가 그대로 살아 있고, 참조 구현이 애초에 필요 없습니다. 우리 `Vector2D`가 정확히 이 길을 택해 함정 5·6을 동시에 피했습니다(16바이트, 포인터 없음 → `Copy` 안전).
+
+둘째, `Copy`가 불가능한 무거운 타입이면, **값+값 구현 하나만 손으로 쓰고 나머지 셋을 매크로로 위임**하세요. 표준 라이브러리가 내부적으로 쓰는 `forward_ref_binop!`과 같은 발상입니다.
+
+```rust
+macro_rules! forward_ref_add {
+    ($t:ty) => {
+        impl Add<&$t> for $t {
+            type Output = <$t as Add<$t>>::Output;
+            fn add(self, rhs: &$t) -> Self::Output { Add::add(self, rhs.clone()) }
+        }
+        impl Add<$t> for &$t {
+            type Output = <$t as Add<$t>>::Output;
+            fn add(self, rhs: $t) -> Self::Output { Add::add(self.clone(), rhs) }
+        }
+        impl Add<&$t> for &$t {
+            type Output = <$t as Add<$t>>::Output;
+            fn add(self, rhs: &$t) -> Self::Output { Add::add(self.clone(), rhs.clone()) }
+        }
+    };
+}
+forward_ref_add!(BigNum);   // 이제 &a + &b, &a + b, a + &b 전부 동작
+```
+
+매크로 한 줄로 세 조합이 생기고, `&a + &b` 후에도 `a`, `b`가 살아 있습니다. 파이썬에는 이 함정이 없습니다 — 모든 것이 참조(객체 핸들)라 `a + b`가 `a`를 "소비"하지 않으니까요. 하지만 그 편안함의 이면에는 9.5의 측정에서 본, 매 연산마다 일어나는 힙 할당과 참조 카운팅이 깔려 있습니다. Rust는 "소유권을 이동할 것인가, 빌려서(참조로) 처리할 것인가"를 연산자 시그니처에 명시하게 함으로써, 그 비용을 코드에 드러냅니다. 매크로는 그 명시성을 유지하면서 보일러플레이트만 걷어내는 절충안입니다.
+
+---
+
+## 연습문제
+
+읽기만 해서는 트레이트가 손에 붙지 않습니다. 아래 네 문제를 **직접 타이핑해서 컴파일**해 보세요. Rustlings처럼, 각 문제에는 통과 조건(`assert!`)이나 자기검증용 컴파일러 에러코드를 달았습니다. 정답을 보기 전에 먼저 30분만 붙들어 보길 권합니다. 막히면 9.3(`Display`/`Debug`), 9.5(`PartialEq`), 9.4(`Add`)로 돌아가세요.
+
+### 문제 1 — `Display` 구현 (난이도: ★)
+
+RGB 색상 구조체에 `Display`를 구현해, `println!("{c}")`가 `#RRGGBB` 형식의 16진수 문자열(예: `#FF6347`)을 출력하게 만드세요. 각 채널은 항상 두 자리 대문자 16진수여야 합니다(`7` → `07`이 아니라 `07`, `255` → `FF`).
+
+```rust
+use std::fmt;
+
+struct Rgb { r: u8, g: u8, b: u8 }
+
+// TODO: impl fmt::Display for Rgb { ... }
+
+fn main() {
+    let c = Rgb { r: 255, g: 99, b: 71 };
+    assert_eq!(c.to_string(), "#FF6347"); // 통과하면 성공
+    println!("{c}");
+}
+```
+
+> **정답 스케치.** 핵심은 포맷 명세 `{:02X}`입니다. `0`은 0 패딩, `2`는 최소 폭, `X`는 대문자 16진수. `Display`는 derive 불가이므로(9.3) 반드시 손으로 씁니다.
+>
+> ```rust
+> impl fmt::Display for Rgb {
+>     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+>         write!(f, "#{:02X}{:02X}{:02X}", self.r, self.g, self.b)
+>     }
+> }
+> ```
+>
+> 자기검증: `c.to_string()`이 `"#FF6347"`과 같아야 `assert_eq!`가 통과합니다. `Display`를 빼먹고 `{c}`를 쓰면 9.3에서 본 `error[E0277]: Rgb doesn't implement std::fmt::Display`가 뜹니다. `{:02x}`(소문자)로 쓰면 `#ff6347`이 나와 assert가 실패합니다.
+
+### 문제 2 — 수동 `Debug`로 민감 정보 가리기 (난이도: ★★)
+
+자격 증명 구조체의 `Debug` 출력에서 `password` 필드가 평문으로 새지 않게 만드세요. `#[derive(Debug)]`는 모든 필드를 그대로 찍으므로 쓸 수 없습니다 — `fmt::Debug`를 수동 구현하고, `password` 자리에 `<redacted>`를 출력하세요.
+
+```rust
+use std::fmt;
+
+struct Credentials { user: String, password: String }
+
+// TODO: impl fmt::Debug for Credentials { ... }
+
+fn main() {
+    let c = Credentials { user: "alice".into(), password: "hunter2".into() };
+    let s = format!("{c:?}");
+    assert!(s.contains("alice"));
+    assert!(s.contains("<redacted>"));
+    assert!(!s.contains("hunter2")); // 비밀번호가 새면 실패
+    println!("{s}");
+}
+```
+
+> **정답 스케치.** `Formatter::debug_struct`를 쓰면 derive와 동일한 `이름 { 필드: 값 }` 형태를 손으로 재현하면서 특정 필드만 가릴 수 있습니다.
+>
+> ```rust
+> impl fmt::Debug for Credentials {
+>     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+>         f.debug_struct("Credentials")
+>             .field("user", &self.user)
+>             .field("password", &"<redacted>") // 평문 대신 마스킹
+>             .finish()
+>     }
+> }
+> ```
+>
+> 자기검증: 세 `assert!`가 모두 통과해야 합니다. 출력은 `Credentials { user: "alice", password: "<redacted>" }`. 실무에서는 `secrecy` 크레이트의 `Secret<T>`가 정확히 이 패턴(자동 마스킹 + 메모리 제로화)을 제공합니다.
+
+### 문제 3 — 도메인 의미를 반영한 수동 `PartialEq` (난이도: ★★)
+
+시맨틱 버전 `Version`을 모델링하되, **빌드 메타데이터(`build`)는 동등성 비교에서 제외**하세요. 즉 `major.minor.patch`가 같으면 `build`가 달라도 `==`가 `true`여야 합니다(SemVer 명세가 실제로 이렇게 규정합니다). `#[derive(PartialEq)]`는 모든 필드를 비교하므로 쓸 수 없습니다.
+
+```rust
+struct Version { major: u32, minor: u32, patch: u32, build: String }
+
+// TODO: impl PartialEq for Version { ... }
+
+fn main() {
+    let a = Version { major: 1, minor: 2, patch: 0, build: "abc".into() };
+    let b = Version { major: 1, minor: 2, patch: 0, build: "xyz".into() };
+    let c = Version { major: 1, minor: 3, patch: 0, build: "abc".into() };
+    assert!(a == b);  // build만 다름 → 같아야 함
+    assert!(a != c);  // minor가 다름 → 달라야 함
+    println!("OK");
+}
+```
+
+> **정답 스케치.** 9.5의 `CacheEntry` 예제와 같은 원리입니다 — 비교에 넣을 필드만 `&&`로 엮습니다.
+>
+> ```rust
+> impl PartialEq for Version {
+>     fn eq(&self, other: &Self) -> bool {
+>         self.major == other.major
+>             && self.minor == other.minor
+>             && self.patch == other.patch
+>         // build는 의도적으로 제외
+>     }
+> }
+> ```
+>
+> 자기검증: 두 `assert!`가 통과합니다. `!=`는 우리가 구현하지 않아도 `eq`에서 자동 유도됩니다(9.2 표의 "`__ne__`는 `eq`에서 자동 유도"). 한 단계 더: 이 타입에 `Eq`를 derive하려 하면 `String`은 `Eq`라 통과하지만, 수동 `PartialEq`와 derive `Hash`가 **불일치**하면 9.9 함정 3의 버그가 재현됩니다 — `Hash`도 `build`를 빼고 손으로 맞춰야 합니다.
+
+### 문제 4 — `Add` 구현과 `Output` 연관 타입 (난이도: ★★)
+
+2×2 행렬 `Mat2`에 성분별 덧셈(`+`)을 구현하세요. `type Output`을 명시하고, `Copy`를 derive해 `m1 + m2` 후에도 두 행렬을 재사용할 수 있게 하세요(9.9 함정 5·6 회피).
+
+```rust
+use std::ops::Add;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Mat2 { a: f64, b: f64, c: f64, d: f64 }
+
+// TODO: impl Add for Mat2 { ... }
+
+fn main() {
+    let m1 = Mat2 { a: 1.0, b: 2.0, c: 3.0, d: 4.0 };
+    let m2 = Mat2 { a: 5.0, b: 6.0, c: 7.0, d: 8.0 };
+    let sum = m1 + m2;
+    assert_eq!(sum, Mat2 { a: 6.0, b: 8.0, c: 10.0, d: 12.0 });
+    let _again = m1 + m2; // Copy라 재사용 가능 — 이 줄이 컴파일되면 성공
+    println!("{sum:?}");
+}
+```
+
+> **정답 스케치.** `Vector2D::add`(9.4)와 구조가 같습니다 — 네 성분을 각각 더해 새 `Mat2`를 반환하고, 결과 타입을 `type Output = Mat2;`로 못 박습니다.
+>
+> ```rust
+> impl Add for Mat2 {
+>     type Output = Mat2;
+>     fn add(self, rhs: Mat2) -> Mat2 {
+>         Mat2 {
+>             a: self.a + rhs.a, b: self.b + rhs.b,
+>             c: self.c + rhs.c, d: self.d + rhs.d,
+>         }
+>     }
+> }
+> ```
+>
+> 자기검증: `assert_eq!`가 통과하고, `_again = m1 + m2` 줄이 컴파일되어야 합니다(`Copy` 덕분). `#[derive(Copy)]`를 빼면 그 줄에서 `error[E0382]: use of moved value: m1`이 떠, 9.9 함정 5를 몸으로 겪게 됩니다. `Add`를 구현하지 않고 `m1 + m2`를 쓰면 `error[E0369]: cannot add Mat2 to Mat2`입니다.
 
 ---
 

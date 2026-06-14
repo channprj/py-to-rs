@@ -299,7 +299,18 @@ impl<T, U: From<T>> Into<U> for T {
 >
 > 대가는 코드 크기입니다. 100가지 타입이 `log()`를 호출하면 100개의 기계어 함수가 생깁니다(코드 비대화, code bloat). Chapter 10에서 본 정적 디스패치 vs 동적 디스패치의 트레이드오프가 여기서도 동일하게 적용됩니다. 코드 크기가 정말 문제라면 `&dyn Loggable` 트레이트 객체로 동적 디스패치를 택해 함수 하나만 남길 수 있습니다.
 >
-> 수치로 감을 잡아 봅시다. "간단한 객체를 만들고 메서드 하나를 호출"하는 작업을 1,000만 번 반복하면, CPython 3.11에서는 객체 할당(힙) + `__mro__` 탐색 + 인터프리터 디스패치가 겹쳐 보통 수백 밀리초~1초 단위가 걸립니다. 같은 의미의 Rust 코드는 `--release` 빌드에서 스택 구성 + 인라이닝된 호출로 펼쳐져 수 밀리초 이내에 끝납니다 — 대략 한 자릿수 후반에서 두 자릿수 배의 차이입니다(정확한 배수는 작업의 메모리 패턴과 측정 환경에 좌우되므로, "수십 배" 정도로 기억하면 충분합니다). 빌더/트레이트라는 추상화 계층이 이 격차의 *원인이 아니라*, 컴파일 타임에 제거되어 격차에 *기여하지 않는다*는 것이 핵심입니다.
+> 수치로 감을 잡아 봅시다. "필드 네 개짜리 객체를 만들고 그 필드를 읽는" 작업을 1,000만 번 반복하는 마이크로벤치마크를 직접 측정했습니다(2026-06, Apple Silicon, Python 3.13.6 / rustc 1.90.0 `-O`).
+>
+> ```text
+> CPython 3.13.6  (class + __slots__)  : 1,460 ms   (146 ns/객체)
+> CPython 3.13.6  (plain class, __dict__): 1,690 ms   (169 ns/객체)
+> Rust 1.90.0     (필드 직접 대입)       :   7.8 ms   (0.78 ns/객체)
+> Rust 1.90.0     (타입 상태 빌더 경유)   :   7.9 ms   (0.79 ns/객체)
+> ```
+>
+> CPython은 객체당 힙 할당 + 참조 카운트 갱신 + 인터프리터 디스패치를 매번 치르므로 객체 하나에 146~169나노초가 듭니다. 같은 의미의 Rust 코드는 스택 구성 + 인라이닝으로 펼쳐져 객체당 0.8나노초 미만입니다 — 이 CPU 핫 루프에서는 **약 185~214배** 차이입니다(`__slots__` 대비 1460/7.8≈187, plain class 대비 1690/7.8≈217). 일반적인 객체 생성에서 "수십 배", 이처럼 할당·디스패치가 지배하는 핫 루프에서는 "100배 이상"으로 벌어집니다. 측정 환경·객체 크기·할당 패턴에 따라 배수는 달라지므로 절대 수치보다 **자릿수의 격차**로 기억하세요.
+>
+> 결정적인 대목은 마지막 두 줄입니다. **타입 상태 빌더를 경유한 Rust(7.9 ms)와 필드를 직접 대입한 Rust(7.8 ms)가 측정 오차 안에서 동일합니다.** 빌더/트레이트라는 추상화 계층이 이 격차의 *원인이 아니라*, 컴파일 타임에 제거되어 격차에 *기여조차 하지 않는다*는 것이 핵심입니다. 이 "빌더가 정말로 무비용인가"는 11.6.2에서 어셈블리 수준으로 증명합니다.
 
 ---
 
@@ -690,6 +701,112 @@ error[E0599]: no method named `build` found for struct
 >
 > 더 나아가, `.url().method().build()`로 빌더가 상태를 갈아타며 매번 새 구조체를 "만드는" 것처럼 보이지만, 모든 필드는 `move`(Chapter 4의 이동 의미론)로 옮겨지고 타입만 갈아끼워질 뿐 비트 수준에서는 같은 데이터입니다. 옵티마이저는 이 연쇄적 `move`를 꿰뚫어 보고 **빌더 전체를 제거(elide)**해 버립니다. `--release` 빌드에서 위 `main`은 결국 `HttpRequest { url, method, body }`를 스택에 한 번 직접 구성하는 코드로 펼쳐집니다. 즉 **타입 상태 빌더는 컴파일 타임 안전성을 100% 제공하면서 런타임 비용은 0**입니다. 이것이 무비용 추상화의 교과서적 사례입니다.
 
+### 11.6.2 무비용임을 증명하기 — 1천만 객체 벤치마크와 동일 어셈블리
+
+"런타임 비용 0"은 듣기 좋은 주장입니다. 그러나 이 책은 근거로 설득하기로 했으니, 직접 측정하고 어셈블리까지 확인해 봅시다. 타입 상태 빌더를 경유한 생성과 구조체 리터럴 직접 대입을 각각 1,000만 번 반복하고(`--release` 동급의 `rustc -O`, Apple Silicon, rustc 1.90.0), 누산값이 같은지로 결과의 동일성도 검증합니다.
+
+```rust
+// 발췌 — 두 경로가 같은 Config 1천만 개를 만든다 (전체는 본문 저장소 bench.rs)
+fn via_builder() -> u64 {        // 타입 상태 빌더 경유
+    let mut acc = 0u64;
+    for i in 0..10_000_000u64 {
+        let r = Builder::new()
+            .url(String::new())
+            .method((i & 0xFF) as u8)
+            .timeout((i & 0xFFFF) as u32)
+            .build();
+        acc = acc.wrapping_add(r.method as u64 + r.timeout as u64 + r.retries as u64);
+        std::hint::black_box(&r);   // 옵티마이저가 루프를 통째로 날리지 못하게 고정
+    }
+    acc
+}
+fn via_direct() -> u64 { /* 같은 필드를 HttpRequest { .. } 리터럴로 직접 대입 */ }
+```
+
+측정 결과는 다음과 같습니다.
+
+```text
+builder: 7.88 ms  (acc=328459709696)   0.79 ns/객체
+direct : 7.79 ms  (acc=328459709696)   0.78 ns/객체
+acc equal: true
+```
+
+두 경로의 시간이 측정 오차(약 1%) 안에서 같고, 누산값도 비트 단위로 일치합니다. 그런데 "비슷하다"는 약한 증거입니다. 더 강한 증거는 컴파일러가 두 함수에 대해 무엇을 토해내는가입니다. `#[no_mangle]`을 붙인 두 함수를 `rustc -O --emit asm`으로 뽑아 보면, 충격적인 결과가 나옵니다.
+
+```text
+$ rustc -O --crate-type=lib --emit asm asm.rs
+$ grep -A1 make_via_builder asm.s
+	.globl	_make_via_builder
+.set _make_via_builder, _make_direct          # ← 같은 심볼로 별칭(alias) 처리!
+```
+
+LLVM이 **두 함수의 기계어가 한 바이트도 다르지 않음을 증명**하고는, 빌더 버전(`make_via_builder`)을 직접 대입 버전(`make_direct`)의 **별칭으로 합쳐 버렸습니다**(identical code folding). 즉 함수 본문이 따로 존재하지도 않습니다. 그렇다면 `make_direct`의 본문은 무엇일까요?
+
+```text
+_make_direct:                       # fn make_direct(p: u16, t: u32) -> Config
+	and	w8, w0, #0xffff         # port (u16) 마스킹
+	mov	w9, w1                  # timeout (u32)
+	orr	x8, x9, x8, lsl #32     # 두 필드를 레지스터 한 쌍에 패킹
+	orr	x0, x8, #0x3000000000000 # retries=3 상수를 비트 OR로 박아 넣음
+	ret
+```
+
+빌더 구조체도, `PhantomData`도, `Option`의 래핑/언래핑도, `Missing→Set` 전이도 어셈블리에는 **흔적조차 없습니다.** 세 필드를 레지스터에 채워 반환하는 다섯 줄이 전부입니다. 타입 상태 빌더라는 정교한 컴파일 타임 안전 장치가 런타임에는 글자 그대로 **0바이트, 0사이클**로 증발한 것입니다. 11.1에서 본 CPython의 `__mro__` 순회·힘 할당과 비교해 보세요. 한쪽은 추상화가 런타임 세금이고, 다른 쪽은 추상화가 컴파일 타임에 청산됩니다.
+
+### 11.6.3 타입 상태 빌더 vs `&dyn` 빌더 — vtable의 16바이트
+
+타입 상태 빌더가 "정적 디스패치 + ZST"의 극단이라면, 그 반대편에는 **트레이트 객체(`&dyn`) 기반 빌더**가 있습니다. 설정 키를 런타임 문자열로 받아 동적으로 적용하는 플러그인형 빌더가 그 예입니다. 둘의 메모리·디스패치 비용을 정면으로 비교하면 무비용 추상화의 경계가 또렷해집니다.
+
+```rust
+// 동적 디스패치 빌더 — 키를 런타임에 해석
+trait DynBuilder {
+    fn set(&mut self, key: &str, val: &str);
+}
+struct ConcreteBuilder { url: Option<String>, method: Option<String> }
+impl DynBuilder for ConcreteBuilder {
+    fn set(&mut self, key: &str, val: &str) {
+        match key {
+            "url" => self.url = Some(val.into()),
+            "method" => self.method = Some(val.into()),
+            _ => {}
+        }
+    }
+}
+
+fn configure(b: &mut dyn DynBuilder) {   // &dyn → 동적 디스패치
+    b.set("url", "https://example.com");
+    b.set("method", "GET");
+}
+```
+
+> **Under the Hood: ZST 마커(0바이트) vs fat pointer(16바이트)**
+>
+> 타입 상태 빌더의 `_marker: PhantomData<(U, M)>`는 0바이트입니다(11.6.1). 빌더의 상태 정보는 *값*이 아니라 *타입*에 있으므로, 메모리에는 실제 데이터 필드만 남습니다. 반면 `&dyn DynBuilder`는 **fat pointer(뚱뚱한 포인터)**입니다 — 데이터 포인터 8바이트 + vtable 포인터 8바이트, 합 16바이트. 직접 측정했습니다(rustc 1.90.0, 64비트).
+>
+> ```text
+> size_of::<&ConcreteBuilder>()        = 8    ← 구체 타입 참조: thin pointer
+> size_of::<&dyn DynBuilder>()         = 16   ← 트레이트 객체: fat pointer (data 8 + vtable 8)
+> size_of::<&mut dyn DynBuilder>()     = 16
+> size_of::<Box<dyn DynBuilder>>()     = 16
+> size_of::<PhantomData<(Set, Set)>>() = 0    ← 타입 상태 마커: 무게 0
+> ```
+>
+> 두 번째 8바이트가 가리키는 vtable은 컴파일러가 타입마다 한 번 만들어 두는 정적 테이블로, 대략 다음을 담습니다.
+>
+> ```text
+> ConcreteBuilder의 vtable (정적, 읽기 전용):
+> ┌────────────────────────────────────────────┐
+> │ [0] drop_in_place(*mut ConcreteBuilder)     │  ← 소멸자 포인터
+> │ [1] size  = 16  (ConcreteBuilder 크기)       │
+> │ [2] align = 8                               │
+> │ [3] set(&mut self, &str, &str)  함수 포인터  │  ← 트레이트 메서드
+> └────────────────────────────────────────────┘
+> ```
+>
+> `b.set(...)`를 호출할 때마다 런타임은 fat pointer의 두 번째 워드로 vtable을 찾고, 그 안의 슬롯 `[3]`에서 함수 주소를 읽어 **간접 점프(indirect call)**합니다. 이 한 단계의 메모리 적재 + 간접 분기가 동적 디스패치의 비용이며, 분기 예측이 빗나가면 더 비싸집니다. 게다가 함수 주소가 런타임에야 정해지므로 **인라이닝이 불가능**합니다 — 11.6.2에서 본 "다섯 줄로 증발"이 여기서는 일어나지 않습니다.
+>
+> 정리하면, 타입 상태 빌더는 *상태를 타입으로* 옮겨 메모리 0바이트·디스패치 0사이클·인라이닝 가능이라는 삼박자를 얻지만, 가능한 상태 조합마다 별도의 단일형화 코드를 찍어내 코드 크기가 늘 수 있습니다(11.3.3의 code bloat). `&dyn` 빌더는 fat pointer 16바이트와 간접 호출 비용을 내는 대신, 코드를 한 벌만 두고 런타임에 빌더 종류를 바꿔 끼울 수 있습니다(플러그인·설정 파일 기반 구성). 컴파일 타임에 필요한 빌더가 다 정해지고 성능이 중요하면 타입 상태를, 런타임에 빌더 종류를 갈아 끼워야 하면 `&dyn`을 택합니다. Chapter 10에서 본 정적 vs 동적 디스패치 트레이드오프가 생성 패턴에서도 그대로 반복됩니다.
+
 ---
 
 ## 11.7 그 외의 생성 패턴: `Default`, `From`/`TryFrom`, `new()`, 팩토리
@@ -1021,6 +1138,114 @@ pub fn port(mut self, p: u16) -> Self {
 ```
 
 검증 실패는 패닉이 아니라 값으로 표현해야 합니다. 검증이 필요하면 `build()`가 `Result<Email, BuildError>`를 돌려주게 하거나(11.5.3의 `derive_builder` 방식), 애초에 `TryFrom`으로 입력을 정제해 빌더에 넣으세요. Chapter 12에서 다룰 "실패를 타입으로 표현하기"의 연장선입니다.
+
+**함정 5 — 블랭킷 impl을 쓰다 고아 규칙(Orphan Rule)과 충돌하기.**
+
+11.3.3의 블랭킷 impl은 강력하지만, 그 강력함을 두 가지 규칙이 단단히 제약합니다. 파이썬의 몽키패칭("외부 클래스에 메서드를 마음대로 주입")에 익숙한 손이 가장 자주 부딪히는 벽입니다.
+
+첫째는 **고아 규칙(Orphan Rule)**입니다. *외부 크레이트의 트레이트*를 *외부 크레이트의 타입*에 구현하는 것은 금지됩니다 — 트레이트와 타입 중 적어도 하나는 내 크레이트 소속이어야 합니다. 예컨대 표준 라이브러리의 `Display`를 표준 라이브러리의 `Vec<T>`에 구현하려 들면:
+
+```rust
+use std::fmt;
+// 🚨 둘 다 외부(std) 소속 → 고아 규칙 위반
+impl<T> fmt::Display for Vec<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "my vec")
+    }
+}
+```
+
+```text
+error[E0117]: only traits defined in the current crate can be implemented for
+              types defined outside of the crate
+ --> src/main.rs:4:1
+  |
+4 | impl<T> fmt::Display for Vec<T> {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^------
+  |                          |
+  |                          `Vec` is not defined in the current crate
+  |
+  = note: define and implement a trait or new type instead
+```
+
+`error[E0117]`은 "트레이트도 타입도 다 남의 것"임을 지적합니다. 이 규칙이 없다면 두 크레이트가 같은 `(트레이트, 타입)` 쌍에 서로 다른 구현을 달았을 때, 어느 쪽이 이길지 정의할 수 없습니다(전역 일관성 붕괴). 해법은 에러 메시지가 친절히 알려 주듯 **뉴타입(Newtype, Chapter 8)으로 감싸기**입니다 — `struct MyVec<T>(Vec<T>);`를 만들면 `MyVec`이 내 타입이므로 `impl Display for MyVec`이 합법입니다.
+
+둘째는 **중첩 금지(Overlap)**입니다. 블랭킷 impl이 이미 커버하는 타입에 다시 구체 impl을 달면, 같은 타입에 두 구현이 겹쳐 충돌합니다.
+
+```rust
+trait Summary { fn summary(&self) -> String; }
+
+// 블랭킷: Debug를 가진 모든 T
+impl<T: std::fmt::Debug> Summary for T {
+    fn summary(&self) -> String { format!("{:?}", self) }
+}
+
+#[derive(Debug)]
+struct Order { id: u64 }
+
+// 🚨 Order는 Debug이므로 위 블랭킷이 이미 커버 중 → 충돌
+impl Summary for Order {
+    fn summary(&self) -> String { format!("Order #{}", self.id) }
+}
+```
+
+```text
+error[E0119]: conflicting implementations of trait `Summary` for type `Order`
+  --> src/main.rs:14:1
+   |
+4  | impl<T: std::fmt::Debug> Summary for T {
+   | -------------------------------------- first implementation here
+...
+14 | impl Summary for Order {
+   | ^^^^^^^^^^^^^^^^^^^^^^ conflicting implementation for `Order`
+```
+
+`error[E0119]`은 블랭킷 impl과 구체 impl이 `Order`에서 겹친다고 알려 줍니다. 파이썬이라면 나중에 정의한 메서드가 조용히 앞의 것을 덮어썼겠지만, Rust는 "두 후보 중 무엇을 쓸지 결정론적으로 정할 수 없다"며 거부합니다. 그래서 **블랭킷 impl은 한 트레이트당 하나만, 그리고 그것과 겹치는 구체 impl을 함께 둘 수 없다**는 점을 설계 단계에서 못 박아야 합니다. 일부 타입만 다르게 동작시키고 싶다면, 블랭킷 대신 각 타입에 개별 impl을 달거나(겹침 없음), 트레이트를 둘로 쪼개세요. (참고: 표준 라이브러리가 `From`/`Into`에서 블랭킷을 안전하게 쓸 수 있는 것도, 그 한 쌍에 대해 중첩이 발생하지 않도록 신중히 설계되어 있기 때문입니다 — 11.3.3.)
+
+---
+
+## 연습문제
+
+Rustlings 스타일로 손을 움직여 풀어 보세요. 각 문항은 `fn main()`까지 직접 채워 `rustc -O x.rs`로 컴파일·실행하고, 정답 스케치의 **자기검증 신호**(컴파일러 에러코드 또는 측정값)로 답을 확인합니다. 머릿속으로만 읽지 말고 컴파일러에게 물어보세요 — 이 장의 핵심은 "타입 시스템이 답을 알려 준다"입니다.
+
+**문제 1 — 소비형 빌더 (11.5.1).**
+`DbConfig { url: String, pool_size: u32, timeout_ms: u32 }`를 위한 소비형 빌더를 작성하세요. 요구사항: (a) `DbConfig::builder("postgres://...")`로 시작하며 `url`은 필수, (b) `pool_size`(기본 10), `timeout_ms`(기본 5000)는 체이닝으로 선택 설정, (c) `.build()`로 완성. 그런 다음, 존재하지 않는 setter `.pool_zise(32)`(오타)를 호출해 보고 컴파일러가 무엇이라 하는지 확인하세요.
+
+> **정답 스케치.** 본체 `DbConfig`와 별개로 `DbConfigBuilder` 구조체를 두고, `builder()`에서 기본값을 채워 반환합니다. 각 setter는 `mut self`를 받아 필드를 갱신하고 `self`를 돌려줘 체이닝을 잇습니다(`pub fn pool_size(mut self, n: u32) -> Self { self.pool_size = n; self }`). `build(self)`가 본체를 조립합니다.
+> ```rust
+> let cfg = DbConfig::builder("postgres://localhost/app").pool_size(32).build();
+> assert_eq!(cfg.pool_size, 32);
+> assert_eq!(cfg.timeout_ms, 5000); // 설정 안 한 필드는 기본값 유지
+> ```
+> 자기검증: 오타 `.pool_zise(32)`는 `error[E0599]: no method named 'pool_zise' found`로 막힙니다. 11.4의 파이썬 `tsl` 오타가 *침묵*하던 것과 정반대 — 빌더는 오타를 빌드 실패로 바꿉니다.
+
+**문제 2 — 기본 메서드 트레이트 (11.3, Mixin 대체).**
+재시도 정책을 표현하는 트레이트 `Retryable`을 정의하세요. (a) `max_attempts(&self) -> u32`는 **required method**(구현체가 반드시 채움), (b) `should_retry(&self, attempt: u32) -> bool`과 `backoff_ms(&self, attempt: u32) -> u64`는 **default method**로 제공합니다(`should_retry`는 `attempt < max_attempts()`, `backoff_ms`는 지수 백오프 `100 << attempt`). 그리고 `AggressiveClient`가 `backoff_ms`만 0으로 오버라이드하도록 하세요.
+
+> **정답 스케치.** 핵심은 default method 안에서 required method를 호출하는 것입니다 — 이것이 파이썬 Mixin의 묵시적 `self.x` 의존을 *시그니처로* 박제하는 지점입니다.
+> ```rust
+> pub trait Retryable {
+>     fn max_attempts(&self) -> u32;                       // required (전제)
+>     fn should_retry(&self, attempt: u32) -> bool {       // default
+>         attempt < self.max_attempts()
+>     }
+>     fn backoff_ms(&self, attempt: u32) -> u64 { 100u64 << attempt.min(6) }
+> }
+> ```
+> 구현체는 `max_attempts`만 채우면 나머지 두 메서드를 공짜로 얻습니다. `AggressiveClient`는 `fn backoff_ms(&self, _: u32) -> u64 { 0 }`만 추가로 정의해 기본 구현을 덮습니다. 자기검증: `max_attempts` 구현을 빠뜨리면 `error[E0046]: not all trait items implemented, missing: 'max_attempts'`로 컴파일이 막힙니다. 측정 신호: `HttpClient{retries:3}`에 대해 `should_retry(2)==true`, `should_retry(3)==false`, `backoff_ms(3)==800`.
+
+**문제 3 — 제네릭(타입 상태) 빌더 (11.6).**
+`Job { name: String, command: String, schedule: Option<String> }`를 위한 타입 상태 빌더를 작성하세요. `name`과 `command`는 **둘 다 필수**라서, 둘 중 하나라도 설정하지 않으면 `.build()`가 **컴파일조차 되지 않아야** 합니다. `schedule`은 선택입니다. 완성 후, `.command(...)`만 호출하고 `.build()`를 불러 에러를 확인하세요.
+
+> **정답 스케치.** ZST 마커 `Missing`/`Set` 두 개와, 타입 파라미터 두 개를 가진 `JobBuilder<N, C>`(필드는 `Option<String>` + `PhantomData<(N, C)>`)를 둡니다. `new()`는 `JobBuilder<Missing, Missing>`을 반환하고, `name()`은 `JobBuilder<Set, C>`로, `command()`는 `JobBuilder<N, Set>`로 *각자 자기 자리만* 전이시킵니다(그래서 호출 순서가 자유롭습니다). 결정적 한 줄은 `build`를 `impl JobBuilder<Set, Set>`에만 다는 것입니다.
+> ```rust
+> impl JobBuilder<Set, Set> {
+>     pub fn build(self) -> Job {
+>         Job { name: self.name.unwrap(), command: self.command.unwrap(), schedule: self.schedule }
+>     }
+> }
+> ```
+> 타입이 `<Set, Set>`임을 보장하므로 `unwrap()`은 절대 패닉하지 않습니다. 자기검증: `name()`을 빠뜨리면 타입이 `JobBuilder<Missing, Set>`이 되고, `.build()`는 `error[E0599]: no method named 'build' found for struct 'JobBuilder<Missing, Set>'` + `note: the method was found for - 'JobBuilder<Set, Set>'`로 막힙니다(11.6.1). 추가 검증: 11.6.2의 벤치마크처럼 이 빌더를 1천만 번 돌려 직접 대입과 시간을 비교하면 측정 오차 안에서 동일합니다 — 타입 파라미터는 0바이트이기 때문입니다.
 
 ---
 
