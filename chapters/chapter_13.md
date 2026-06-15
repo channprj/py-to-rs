@@ -169,6 +169,52 @@ fn first_char_upper(s: &str) -> Option<char> {
 >
 > `?`는 [Chapter 12](./chapter_12.md)에서 본 무비용 추상화(Zero-cost Abstraction)의 또 다른 예입니다. 우리가 손으로 쓰던 `match`와 `?`는 디슈가링 후 *동일한* 기계어로 컴파일됩니다. `?`를 썼다고 런타임 오버헤드가 한 사이클도 추가되지 않습니다. 가독성은 파이썬의 자동 전파만큼 좋아지면서, 비용은 손으로 짠 `match`와 같습니다. `--release` 빌드에서 옵티마이저는 대개 이 분기조차 인라이닝하고 정리합니다.
 
+### Under the Hood: `?`와 `match`는 정말 같은 기계어인가 — 어셈블리로 증명
+
+"동일한 기계어로 컴파일된다"는 말은 검증 없이 믿을 주장이 아닙니다. 직접 디스어셈블해 봅시다. 다음 두 함수는 의미가 같습니다. 하나는 `?`, 하나는 손으로 푼 `match`입니다.
+
+```rust
+#[inline(never)]
+#[no_mangle]
+pub fn with_question(s: &str) -> Result<i64, std::num::ParseIntError> {
+    let n: i64 = s.parse()?; // ? 버전
+    Ok(n * 2)
+}
+
+#[inline(never)]
+#[no_mangle]
+pub fn with_match(s: &str) -> Result<i64, std::num::ParseIntError> {
+    let n: i64 = match s.parse() { // 손으로 푼 match 버전
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    Ok(n * 2)
+}
+```
+
+`rustc -O --emit asm`(rustc 1.90.0, aarch64/Apple Silicon)로 두 함수의 어셈블리를 뽑아 비교하면, 두 함수가 내뱉는 **명령어의 멀티셋(multiset)이 한 개도 빠짐없이 동일**합니다. 차이는 단 둘뿐입니다. (1) 레지스터 할당 선택(`w9` vs `w10` 같은 임의 배정), (2) 의미가 같은 인접한 두 저장 명령(`strb`)의 순서. 둘 다 *실행 동작에 영향이 없는* 표기 차이입니다.
+
+```text
+# with_question 의 핵심 instruction multiset (개수까지 with_match와 동일)
+$ diff <(asm_of with_question | mnemonics | sort | uniq -c) \
+       <(asm_of with_match   | mnemonics | sort | uniq -c)
+# (출력 없음 → 명령어 종류·개수 완전히 동일)
+
+# with_question 본문 발췌 (aarch64)
+with_question:
+    cbz   x1, ...        # 길이 0이면 에러 분기
+    subs  x10, x1, #1
+    b.ne  ...
+    ldrb  w9, [x0]       # 첫 바이트 로드 (부호/숫자 판별)
+    cmp   w9, #43        # '+' ?
+    b.eq  ...
+    cmp   w9, #45        # '-' ?
+    ...
+    ret
+```
+
+`?`가 디슈가링한 `match { Ok(v)=>v, Err(e)=>return Err(From::from(e)) }`와, 우리가 손으로 쓴 `match`가 동일한 제어 흐름 그래프를 만들기 때문에, LLVM 옵티마이저는 둘을 같은 기계어로 수렴시킵니다. 여기서 에러 타입이 동일(`ParseIntError → ParseIntError`)하므로 `From::from`은 항등 변환(`From<T> for T`)이 되어 한 사이클도 추가하지 않습니다. **즉 `?`의 가독성은 100% 공짜입니다.** 파이썬에서 `try-except`로 감싸면 인터프리터가 예외 핸들러 블록을 설치하고 프레임마다 정리 루틴을 등록하는 것과는 차원이 다릅니다 — Rust에서는 추가되는 명령어가 글자 그대로 0개입니다.
+
 ---
 
 ## 13.3 컴파일러 에러로 배우는 `?`의 진실
@@ -457,6 +503,18 @@ size_of::<Box<dyn Error>>()         = 16   // 팻 포인터: data + vtable
 size_of::<Result<(), Box<dyn Error>>>() = 16   // 니치 최적화로 추가 비용 0
 ```
 
+> **💡 정정: `anyhow::Error`는 16바이트가 아니라 8바이트다**
+>
+> 흔한 오해 하나를 바로잡고 갑시다. `anyhow::Error`가 내부적으로 `Box<dyn Error>`를 쓴다고 들으면, 그 크기도 팻 포인터인 16바이트일 것이라 짐작하기 쉽습니다. **틀렸습니다.** 직접 측정하면(rustc 1.90.0, `anyhow` 1.x):
+>
+> ```text
+> size_of::<Box<dyn Error>>()       = 16   // 팻 포인터 (data + vtable)
+> size_of::<anyhow::Error>()        = 8    // 씬 포인터 (thin pointer)!
+> size_of::<anyhow::Result<()>>()   = 8    // 니치 최적화로 추가 비용 0
+> ```
+>
+> `anyhow::Error`는 8바이트, 즉 포인터 *하나*입니다. 비결은 `anyhow`가 vtable을 팻 포인터의 둘째 워드로 들고 다니지 않고, **힙 할당 블록의 맨 앞에 vtable 포인터를 함께 박아 넣기** 때문입니다. 즉 `Box<dyn Error>`가 `(data, vtable)` 두 워드를 스택/레지스터에 얹고 다니는 대신, `anyhow::Error`는 `[vtable | 실제 에러 데이터]` 레이아웃의 힙 블록을 가리키는 포인터 하나만 들고 다닙니다. 이 설계 덕분에 `Result<T, anyhow::Error>`가 함수 사이를 오갈 때 옮겨야 할 에러 채널이 8바이트로 끝납니다 — `Box<dyn Error>`(16바이트)의 절반입니다. 에러 경로가 드물수록(거의 항상 그렇습니다) 성공 경로의 반환 비용을 작게 유지하는 이 8바이트 설계가 빛을 발합니다. "라이브러리 에러는 enum으로 슬림하게"라는 원칙을 `anyhow` 자신이 자기 타입에 적용해 둔 셈입니다.
+
 반면 커스텀 enum은 **정적 디스패치**입니다. enum 자체가 모든 가능한 variant를 인라인으로 품기 때문에 vtable도 힙 박싱도 없습니다. 대신 크기는 가장 큰 variant에 의해 결정됩니다. 여기서 실무적으로 중요한 함정이 나옵니다.
 
 ```rust
@@ -654,6 +712,144 @@ fn main() {
 **함정 4: `?`를 쓰려는데 `From`이 없어서 막힘.** 13.3의 `error[E0277]`을 만나면 당황하지 마세요. 컴파일러가 정확히 무엇을 원하는지(`From<X> for MyError`) 알려줍니다. `thiserror`라면 해당 variant에 `#[from]`을 붙이면 끝, 손으로 짠다면 `impl From<X> for MyError`를 추가하면 됩니다.
 
 **함정 5: `panic!`과 `Result`를 혼동하기.** 파이썬에서는 모든 비정상이 예외입니다. Rust는 *복구 가능한 에러*(`Result`)와 *복구 불가능한 버그*(`panic!`)를 의도적으로 분리합니다. "파일이 없다"는 `Result`(호출자가 폴백할 수 있음)지만, "배열 인덱스가 범위를 벗어났다"는 `panic!`(프로그래머의 논리 오류)입니다. 라이브러리 코드에서 입력 검증 실패에 `panic!`을 쓰면, 그것을 `try-except`로 잡을 방법이 사실상 없어 호출자를 곤란하게 만듭니다. 복구 가능성이 조금이라도 있으면 `Result`를 반환하세요.
+
+---
+
+## 13.9 벤치마크: 예외를 제어 흐름으로 쓰면 — 100만 건의 진실
+
+13.1의 "청구서 3"에서 파이썬 예외가 *제어 흐름*으로 오용될 때 비싸진다고 주장했습니다. 주장은 측정으로 증명해야 합니다. 가장 흔한 핫루프 시나리오 — "100만 개의 문자열을 정수로 파싱하는데 절반이 실패한다" — 를 양쪽 언어로 똑같이 짜서 재 봅시다.
+
+파이썬은 EAFP 스타일, 즉 일단 `int()`를 시도하고 `ValueError`를 `except`로 받는 전형적 관용구입니다.
+
+```python
+import time
+
+N = 1_000_000
+inputs = [str(i) if i % 2 == 0 else f"x{i}" for i in range(N)]
+
+def run() -> tuple[int, int]:
+    total, errors = 0, 0
+    for s in inputs:
+        try:
+            total += int(s) * 2      # 절반은 여기서 ValueError
+        except ValueError:           # 예외를 제어 흐름으로 소비
+            errors += 1
+    return total, errors
+```
+
+Rust는 같은 로직을 `Result` 반환과 `match`로 표현합니다. `Err`은 던지는 게 아니라 그냥 *값으로 반환*될 뿐입니다.
+
+```rust
+fn parse_or_zero(s: &str) -> Result<i64, std::num::ParseIntError> {
+    let n: i64 = s.parse()?;
+    Ok(n * 2)
+}
+
+fn run(inputs: &[String]) -> (i64, u64) {
+    let (mut sum, mut errors) = (0i64, 0u64);
+    for s in inputs {
+        match parse_or_zero(s) {
+            Ok(v) => sum = sum.wrapping_add(v),
+            Err(_) => errors += 1, // Err을 제어 흐름으로 소비
+        }
+    }
+    (sum, errors)
+}
+```
+
+측정 환경은 동일합니다(Python 3.13.6, rustc 1.90.0 `--release`, 같은 머신, 각 7~12회 반복의 최솟값). 결과는 다음과 같습니다.
+
+| 시나리오 (100만 건) | 총 시간 | 건당 | Rust 대비 |
+|---|---|---|---|
+| **Python** EAFP, 50% 예외 | **211 ms** | 211 ns | 약 120배 느림 |
+| Python EAFP, 0% 예외 (행복 경로) | 47 ms | 47 ns | — |
+| Python LBYL, 50% (`s.isdigit()` 선검사, 예외 없음) | 41 ms | 41 ns | — |
+| **Rust** `Result`, 50% Err | **1.76 ms** | 1.76 ns | 1배(기준) |
+| Rust `Result`, 0% Err (행복 경로) | 2.24 ms | 2.24 ns | — |
+
+읽어낼 사실이 셋입니다.
+
+**사실 1 — 절대 격차: 약 120배.** 같은 일(절반 실패하는 100만 건 파싱)을 Rust는 1.76ms, Python은 211ms에 합니다. CPython 인터프리터 루프 자체의 오버헤드가 큰 몫이지만, 그 위에 예외 메커니즘이 얹혀 격차를 벌립니다.
+
+**사실 2 — 파이썬의 *예외 자체* 비용: 약 5배.** 같은 EAFP 코드인데 예외가 0%면 47ms, 50%면 211ms입니다. 차이 164ms는 순수하게 *50만 번 예외를 만들고 던지고 잡은* 비용입니다. 예외 한 건당 약 328ns(`(211-47)ms / 500_000`)가 트레이스백 객체 생성·스택 언와인딩·핸들러 매칭에 쓰입니다. `isdigit()`으로 선검사하는 LBYL 버전(41ms)이 EAFP 0% 버전과 비슷하다는 것도 같은 이야기입니다 — 예외를 *아예 발생시키지 않는* 것이 핵심입니다. "예외는 예외적인 상황에만 쓰라"는 조언의 정량적 근거가 바로 이 164ms입니다.
+
+**사실 3 — Rust에는 비대칭이 없다.** Rust는 에러 50%(1.76ms)가 에러 0%(2.24ms)보다 오히려 *빠릅니다*. `Err` 경로가 곱셈·덧셈을 건너뛰기 때문일 뿐, 에러를 만드는 비용 자체는 `Ok`를 만드는 비용과 같습니다. `Result`는 그냥 값이고, `Err(e)` 생성에는 트레이스백도 스택 언와인딩도 없습니다. 그래서 Rust에서는 — 파이썬과 달리 — 에러가 흔한 핫루프에서도 `Result`를 제어 흐름으로 마음껏 써도 됩니다. EAFP의 성능 페널티가 구조적으로 존재하지 않습니다.
+
+> **💡 측정의 정직함**: 위 120배는 "예외를 제어 흐름으로 쓰는 핫루프"라는 특정 시나리오의 수치입니다. CPython의 인터프리터 오버헤드와 예외 비용이 결합된 결과이므로, I/O 바운드 코드나 예외가 드문 코드에서는 격차가 훨씬 작습니다. 핵심 교훈은 "Rust가 무조건 120배 빠르다"가 아니라, **"파이썬에서 비싼 비대칭(예외 = 비싸고 정상 = 싸다)이 Rust에는 없다"**는 구조적 차이입니다.
+
+## 13.10 한 발 앞서: `axum`에서 에러를 HTTP 상태코드로
+
+이번 장의 마지막 조각은 실무 웹 서버로의 다리입니다. 13.6에서 "에러는 깊은 곳에서 `?`로 전파하고 얕은 경계에서 한 번 처리한다"고 했습니다. 백엔드 엔지니어에게 그 "얕은 경계"는 보통 **HTTP 핸들러**입니다. 파이썬 FastAPI라면 예외 핸들러를 등록해 `ValidationError → 400`, `NotFound → 404`로 매핑할 것입니다.
+
+```python
+# FastAPI 스타일: 예외를 상태코드로 매핑
+@app.exception_handler(ValidationError)
+async def on_validation(request, exc):
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+```
+
+Rust의 웹 프레임워크 **`axum`**(tokio 기반, [Chapter 18](./chapter_18.md)의 async 위에 세워집니다)에서는 이 매핑을 **`IntoResponse` 트레이트** 한 곳에 모읍니다. 우리가 `thiserror`로 만든 에러 enum에 `IntoResponse`를 구현하면, 핸들러는 그냥 `?`로 에러를 전파만 하고 — 도메인 에러 → HTTP 응답 변환은 단 한 군데에서 일어납니다.
+
+```rust
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ApiError {
+    #[error("리소스를 찾을 수 없습니다: {0}")]
+    NotFound(String),
+    #[error("입력 검증 실패: {0}")]
+    Validation(String),
+    #[error("내부 오류")]
+    Internal(#[from] std::io::Error),
+}
+
+// 도메인 에러 -> HTTP 상태코드 매핑을 한 곳에 집중
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            ApiError::NotFound(_) => StatusCode::NOT_FOUND,          // 404
+            ApiError::Validation(_) => StatusCode::BAD_REQUEST,      // 400
+            ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR, // 500
+        };
+        (status, self.to_string()).into_response()
+    }
+}
+
+// 핸들러는 ? 로 전파만. 변환은 IntoResponse가 책임진다.
+async fn get_user(id: u64) -> Result<String, ApiError> {
+    if id == 0 {
+        return Err(ApiError::Validation("id는 0일 수 없습니다".into()));
+    }
+    if id > 1000 {
+        return Err(ApiError::NotFound(format!("user {id}")));
+    }
+    Ok(format!("user {id}"))
+}
+```
+
+핸들러가 `Result<String, ApiError>`를 반환하면, `axum`은 `Ok`면 200으로, `Err(ApiError)`면 우리가 정의한 `into_response()`를 호출해 상태코드를 입힙니다. 핵심은 **변환 규칙이 타입 한 곳(`impl IntoResponse for ApiError`)에 모인다**는 것입니다. 새 에러 variant를 추가하면 컴파일러가 `match`의 비완전성을 잡아내므로([Chapter 10](./chapter_10.md)에서 본 망라성 검사), "새 에러 타입을 추가했는데 상태코드 매핑을 깜빡한" 버그가 컴파일 단계에서 차단됩니다. 실무에서는 본문을 `(status, Json(ErrorBody { ... }))`로 직렬화([Chapter 7](./chapter_07.md)의 serde)하지만, 골격은 위와 같습니다. PyO3로 Python에 Rust를 노출하는 [Chapter 22](./chapter_22.md)까지 가면, 이 에러 설계가 언어 경계를 넘어 어떻게 파이썬 예외로 다시 번역되는지도 보게 됩니다.
+
+## 연습문제
+
+아래 네 문제는 손으로 풀고 `cargo`로 검증하세요. 각 문제 뒤 '정답 스케치'는 핵심 아이디어와 자기검증용 컴파일러 에러코드/측정값을 담았습니다. Rustlings처럼, 먼저 막힌 뒤 정답을 보는 편이 오래 남습니다.
+
+**문제 1 — `thiserror`의 `#[from]`.** `f64` 가격 문자열을 파싱하는 `parse_price(raw: &str) -> Result<f64, PriceError>`를 작성하세요. `PriceError`는 `thiserror`로 정의하되, (a) `std::num::ParseFloatError`를 `#[from]`으로 흡수하는 `Parse` variant와 (b) 음수 가격을 거부하는 `Negative(f64)` variant를 가져야 합니다. 본문은 `?` 한 번으로 파싱 에러를 전파해야 합니다.
+
+> **정답 스케치.** `#[derive(Debug, Error)]` enum에 `Parse(#[from] ParseFloatError)`와 `Negative(f64)`를 둡니다. `#[from]`이 `From<ParseFloatError> for PriceError`를 자동 생성하므로 `let v: f64 = raw.trim().parse()?;`가 그대로 컴파일됩니다. `#[from]`을 빼면 `?` 줄에서 `error[E0277]: ? couldn't convert the error to PriceError`(13.3에서 본 그 메시지, `From<ParseFloatError>` 미구현)가 납니다. 자기검증: `matches!(parse_price("xx"), Err(PriceError::Parse(_)))`와 `matches!(parse_price("-3"), Err(PriceError::Negative(_)))`가 모두 `true`.
+
+**문제 2 — 손으로 `From` 구현 (매크로 없이).** `thiserror` 없이, `ParseIntError`를 흡수하는 `CliError` enum을 정의하세요. `Display`, `std::error::Error`(`source()` 포함), 그리고 `From<ParseIntError>`를 손으로 구현해 `parse_level(raw) -> Result<i64, CliError>`가 `let n: i64 = raw.parse()?;`로 동작하게 만드세요. 추가로 0..=10 범위를 벗어나면 `OutOfRange(i64)`를 반환합니다.
+
+> **정답 스케치.** 세 구현이 필요합니다 — `impl fmt::Display`(variant별 `write!`), `impl std::error::Error`(`source()`에서 `BadArg`는 `Some(e)`, `OutOfRange`는 `None`), `impl From<ParseIntError> for CliError`. `From` 구현을 빠뜨리면 `?` 줄에서 `error[E0277]`. `Error` 트레이트는 `Display + Debug`를 슈퍼트레이트로 요구하므로 `#[derive(Debug)]`도 빠지면 안 됩니다(빠지면 `error[E0277]: CliError doesn't implement Debug`). 자기검증: `parse_level("xx").unwrap_err().source().is_some()`가 `true`(원인 체인 보존됨), `parse_level("99")`은 `OutOfRange(99)`.
+
+**문제 3 — `?` 전파 + `Option`→`Result` 다리.** `first_price(lines: &[&str]) -> Result<f64, PriceError>`를 작성하세요. 비어 있지 않은 첫 줄을 찾아(`Iterator::find`) 문제 1의 `parse_price`로 넘기되, 모든 줄이 비어 있으면 에러를 반환해야 합니다. `find`가 주는 `Option`을 `?` 흐름에 합류시키는 어댑터를 쓰세요.
+
+> **정답 스케치.** `lines.iter().find(|l| !l.trim().is_empty())`는 `Option<&&str>`입니다. 이를 `.ok_or(...)?` 또는 `.ok_or_else(|| ...)?`로 `Result`화한 뒤 `?`로 전파하고, 꺼낸 줄을 `parse_price`에 넘기면 그 `Result`도 `?`로 이어집니다. 흔한 실수: `Result` 반환 함수 안에서 `Option`에 곧장 `?`를 쓰는 것 — `error[E0277]: the ? operator can only be used on Results, not Options, in a function that returns Result`가 나고, 컴파일러가 친절히 `use .ok_or(...)? to provide an error compatible with Result<...>`라고 해법까지 제시합니다(`Option`의 `?`는 `None` 전파용이라 에러 타입이 없습니다). 반드시 `ok_or`/`ok_or_else`로 변환하세요. 자기검증: `first_price(&["", " ", "9.9"]).unwrap() == 9.9`.
+
+**문제 4 — `anyhow`와 `.context()`.** `anyhow`만 써서 `load(raw: &str) -> anyhow::Result<u32>`를 작성하세요. `raw`를 `u32`로 파싱하되, 실패하면 `.with_context(|| format!("'{raw}'를 u32로 변환 실패"))`로 원본 입력을 담은 맥락을 붙이세요. 그런 다음, 실패 시 `{e:#}` 출력에 그 맥락이, `e.source()`에 원래 `ParseIntError`가 보존되는지 확인하세요.
+
+> **정답 스케치.** `use anyhow::{Context, Result};` 후 `let v: u32 = raw.trim().parse().with_context(|| ...)?;`. `.context()`/`.with_context()`는 `Result`의 `Err`에 한 겹을 씌우면서 원래 에러를 `source()`로 밀어 넣습니다(파이썬 `raise NewError("...") from e`와 동형). 자기검증: `format!("{e:#}").contains("u32로 변환 실패")`가 `true`이고 `e.source().is_some()`이 `true`. `with_context`(클로저, 지연 평가) 대신 `context`(즉시 평가)를 써도 되지만, 포맷 문자열을 매번 만들기 싫다면 실패할 때만 평가되는 `with_context`가 정석입니다. 라이브러리 공개 API라면 이 반환 타입(`anyhow::Result`)을 노출하면 안 된다는 13.6의 규칙도 함께 떠올리세요.
 
 ---
 

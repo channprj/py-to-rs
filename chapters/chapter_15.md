@@ -470,6 +470,103 @@ fn main() {
 >
 > 즉 `v.iter().map(|x| x * x).sum()`은 추상화 계층이 셋이나 되지만, 컴파일 후엔 손으로 짠 인덱스 루프와 *동일한 기계어*입니다. 파이썬의 `sum(x*x for x in v)`가 원소마다 프레임 활성화·바이트코드 디스패치·28바이트 정수 객체 할당을 치르는 것과 정반대입니다. 이것이 무비용 추상화의 실증입니다 — "비용이 적다"가 아니라 "비용이 *0*이다".
 
+> **Under the Hood — 어댑터 체인의 바이트 크기: 클로저가 ZST면 0바이트**
+>
+> 앞 박스에서 어댑터 체인이 "중첩된 구조체"라고 했습니다. 그렇다면 그 구조체는 정확히 *몇 바이트*일까요? `std::mem::size_of_val`로 직접 재보면 무비용이 메모리 차원에서도 사실임이 드러납니다. `Vec<i64>`에 대해(`rustc -O`, 1.90.0 측정):
+>
+> ```rust
+> use std::mem::size_of_val;
+> let v = vec![1i64, 2, 3, 4, 5];
+>
+> let it0 = v.iter();
+> // slice::Iter<i64> = 두 포인터(시작, 끝) = 16바이트
+> assert_eq!(size_of_val(&it0), 16);
+>
+> let it1 = v.iter().filter(|&&x| x % 2 == 0);
+> // Filter = 내부 Iter + 클로저. 그런데 캡처 없는 클로저는 ZST(0바이트)!
+> assert_eq!(size_of_val(&it1), 16);   // 여전히 16 — filter가 공짜로 얹힘
+>
+> let it2 = v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * x);
+> // map도 ZST 클로저 → 또 0바이트 추가
+> assert_eq!(size_of_val(&it2), 16);   // 어댑터 둘을 얹어도 16 그대로
+> ```
+>
+> 핵심은 **캡처(capture)가 없는 클로저는 ZST(Zero-Sized Type), 즉 크기가 0바이트**라는 것입니다. `size_of_val(&|x: i64| x * x)`는 정확히 `0`을 반환합니다. 클로저는 "캡처한 환경을 담는 익명 구조체"인데, 캡처할 것이 없으면 그 구조체는 필드가 0개라 0바이트가 됩니다(Chapter 7에서 본 단위 구조체와 같은 원리). 그래서 `filter`/`map`을 아무리 길게 이어 붙여도, 클로저가 전부 ZST라면 이터레이터 구조체의 크기는 *전혀 늘지 않습니다*. 양파 껍질은 타입(컴파일 타임)에만 존재하고 런타임 메모리에는 흔적이 없습니다.
+>
+> 반대로 환경을 캡처하면 그만큼 자랍니다:
+>
+> ```rust
+> let threshold: i64 = 3;
+> let it = v.iter().filter(move |&&x| x > threshold);
+> // 클로저가 i64 하나(8바이트)를 캡처 → Filter = 16 + 8 = 24
+> assert_eq!(size_of_val(&it), 24);
+> // enumerate처럼 자체 상태(usize 카운터)를 가진 어댑터도 8바이트 더함
+> let it_e = v.iter().map(|&x| x * x).enumerate();
+> assert_eq!(size_of_val(&it_e), 24);   // 16 + usize(8)
+> ```
+>
+> 즉 이터레이터 어댑터의 메모리 비용은 "캡처한 데이터 + 어댑터 자체 상태"의 합이며, 그 외에는 *공짜*입니다. 파이썬 제너레이터 표현식이 매번 프레임 객체(수백 바이트)를 들고 다니는 것과 비교하면, Rust 어댑터 체인은 보통 레지스터 몇 개에 들어가는 십수 바이트입니다.
+
+> **Under the Hood — `impl Trait` 반환 vs `Box<dyn Iterator>`: 정적 디스패치와 동적 디스패치**
+>
+> 함수에서 이터레이터를 *반환*할 때, 그 어댑터 체인의 타입 이름은 `Map<Filter<Iter<'_, i64>, ...>, ...>`처럼 끔찍하게 깁니다. 캡처가 들어가면 클로저 타입이 익명이라 아예 적을 수조차 없습니다. 그래서 반환 타입을 숨기는 두 가지 방법이 있고, 디스패치 비용이 정반대입니다.
+>
+> ```rust
+> // 정적 디스패치: 구체 타입을 컴파일러가 추론, 그대로 단일형화
+> fn evens_static(v: &[i64]) -> impl Iterator<Item = i64> + '_ {
+>     v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * x)
+> }
+>
+> // 동적 디스패치: 트레이트 객체로 박싱
+> fn evens_dynamic(v: &[i64]) -> Box<dyn Iterator<Item = i64> + '_> {
+>     Box::new(v.iter().filter(|&&x| x % 2 == 0).map(|&x| x * x))
+> }
+> ```
+>
+> `impl Trait`는 "구체 타입은 컴파일러가 알지만 이름은 숨긴다"는 뜻입니다. 호출부는 진짜 `Map<Filter<...>>`를 받고, `next()` 호출은 전부 인라이닝됩니다 — **정적 디스패치**, 무비용입니다. 스택 위 핸들 크기는 그 구체 타입 그대로(여기선 16바이트). 힙 할당 0.
+>
+> `Box<dyn Iterator>`는 **트레이트 객체(Trait Object)** 입니다. 이터레이터 구조체를 힙에 한 번 할당하고, 스택에는 **팻 포인터(fat pointer)** — 데이터 포인터 + vtable 포인터, `size_of::<Box<dyn Iterator<Item=i32>>>()`로 재면 정확히 16바이트(8+8) — 만 남깁니다. 매 `next()`는 vtable을 거치는 간접 호출이라 인라이닝이 막히고, 힙 할당이 한 번 듭니다. **동적 디스패치**입니다.
+>
+> | 항목 | `impl Iterator` | `Box<dyn Iterator>` |
+> |---|---|---|
+> | 디스패치 | 정적(인라이닝됨) | 동적(vtable 간접 호출) |
+> | 힙 할당 | 없음 | 1회(이터레이터 박싱) |
+> | 스택 핸들 | 구체 타입 크기(예: 16) | 팻 포인터 16(데이터+vtable) |
+> | 분기마다 다른 타입 반환 | 불가(15.x 에러 참고) | 가능 |
+> | 트레이트 메서드에서 반환 | 제약 있음(연관 타입) | 자유로움 |
+>
+> 규칙은 단순합니다. **거의 항상 `impl Trait`를 쓰세요** — 무비용이니까요. `Box<dyn>`은 (1) `if`/`else` 분기마다 *다른* 어댑터 타입을 반환해야 하거나(다음 박스의 컴파일 에러), (2) `Vec<Box<dyn Iterator>>`처럼 이질적 이터레이터를 한 컨테이너에 담아야 할 때만 꺼내세요. 동적 디스패치의 비용은 핫 루프에서 인라이닝이 막히는 것이지, "느리다"는 막연한 공포가 아닙니다.
+>
+> 그런데 `impl Trait`로 분기마다 다른 타입을 반환하려 들면 컴파일러가 정확히 막습니다.
+>
+> ```rust
+> fn make_iter(reverse: bool) -> impl Iterator<Item = i32> {
+>     if reverse {
+>         (1..=5).rev()  // 타입: Rev<RangeInclusive<i32>>
+>     } else {
+>         1..=5          // 타입: RangeInclusive<i32>  ← 다른 타입!
+>     }
+> }
+> ```
+>
+> ```text
+> error[E0308]: `if` and `else` have incompatible types
+>  --> src/main.rs:6:9
+>   |
+> 4 |         (1..=5).rev()
+>   |         ------------- expected because of this
+> 6 |         1..=5
+>   |         ^^^^^ expected `Rev<RangeInclusive<{integer}>>`,
+>   |               found `RangeInclusive<{integer}>`
+>   |
+> help: you could change the return type to be a boxed trait object
+>   |
+> 2 - fn make_iter(reverse: bool) -> impl Iterator<Item = i32> {
+> 2 + fn make_iter(reverse: bool) -> Box<dyn Iterator<Item = i32>> {
+> ```
+>
+> 컴파일러가 *직접* "`Box<dyn>`으로 바꾸고 각 분기를 `Box::new(...)`로 감싸라"고 해법까지 제시합니다. 이것이 두 방식의 경계선을 가장 선명하게 보여주는 지점입니다 — 단일 구체 타입이면 `impl Trait`(무비용), 여러 타입을 하나로 합쳐야 하면 `Box<dyn>`(동적 디스패치).
+
 ---
 
 ## 15.6 커스텀 `Iterator` 구현 — 피보나치와 슬라이딩 윈도우
@@ -697,7 +794,7 @@ CPython 대비 약 **15~20배**, PyPy 대비 약 **6배**입니다. Chapter 1에
 
 ### 실무 크레이트: `itertools`와 `rayon`
 
-표준 라이브러리 이터레이터로 부족할 때, [`itertools`](https://docs.rs/itertools) 크레이트가 파이썬 `itertools`의 거의 모든 것을 제공합니다 — `group_by`, `unique`, `chunk_by`, `cartesian_product`, `sorted`, `dedup`, `tuple_windows` 등.
+표준 라이브러리 이터레이터로 부족할 때, [`itertools`](https://docs.rs/itertools) 크레이트가 파이썬 `itertools`의 거의 모든 것을 제공합니다 — `chunk_by`, `unique`, `cartesian_product`, `sorted`, `dedup`, `tuple_windows` 등. (인접 그룹핑 어댑터는 0.13에서 `group_by`가 `chunk_by`로 이름이 바뀌었습니다. 표준 라이브러리에 `slice::group_by`가 안정화되면서 이름 충돌을 피하기 위한 변경이니, 옛 자료의 `group_by`는 `chunk_by`로 읽으세요.)
 
 ```rust
 // Cargo.toml: itertools = "0.13"
@@ -718,6 +815,23 @@ fn main() {
     println!("{:?}", unique_sorted); // [1, 2, 3]
 }
 ```
+
+파이썬 `itertools`/내장 함수와 Rust(표준 + `itertools`)의 대응을 한눈에 정리하면 다음과 같습니다. 대부분 이름까지 거의 그대로라, 파이썬 데이터 파이프라인을 옮길 때 이 표가 사전(辭典) 역할을 합니다.
+
+| Python | Rust (표준/`itertools`) | 비고 |
+|---|---|---|
+| `map(f, xs)` | `xs.iter().map(f)` | 둘 다 lazy. Rust는 또 다른 이터레이터 반환 |
+| `filter(p, xs)` | `xs.iter().filter(p)` | Rust 클로저는 `&Item`을 받음(이중 참조 주의, 15.9) |
+| `zip(a, b)` | `a.iter().zip(b)` | 짧은 쪽에서 멈춤(동일) |
+| `itertools.chain(a, b)` | `a.iter().chain(b)` | 이어붙이기(동일) |
+| `zip(a, b, c)` (3개+) | `itertools::izip!(a, b, c)` | 표준 `zip`은 2개만, `izip!`은 가변 개수 |
+| `itertools.groupby(xs, key)` | `xs.iter().chunk_by(key)` | **0.13에서 `group_by`→`chunk_by` rename.** 둘 다 인접 그룹만, 정렬 선행 필요 |
+| `set(xs)` / `dict.fromkeys` | `xs.into_iter().unique()` | `unique`는 순서 보존 + lazy(첫 등장만) |
+| `sorted(xs)` | `xs.into_iter().sorted()` | `itertools::sorted`, 내부적으로 `Vec` 수집 후 정렬 |
+| `itertools.accumulate(xs)` | `xs.iter().scan(...)` | 표준 `scan`이 가장 가까움(중간 누적 방출) |
+| `itertools.product(a, b)` | `a.iter().cartesian_product(b)` | 데카르트 곱 |
+| `itertools.takewhile/dropwhile` | `.take_while(p)` / `.skip_while(p)` | 표준에 내장 |
+| `more_itertools.windowed(xs, n)` | `xs.windows(n)` / `itertools::tuple_windows` | 슬라이스 `windows`는 복사 없음(`&[T]`) |
 
 그리고 진짜 한 방은 [`rayon`](https://docs.rs/rayon)입니다. 위 로그 파이프라인의 `.iter()`를 `.par_iter()`로 **한 글자만 바꾸면** 모든 CPU 코어에 자동 분산됩니다. 파이썬이 GIL 때문에 `multiprocessing`으로 프로세스를 통째로 복제해야 했던 그 병렬화가, Rust에서는 이터레이터 메서드 교체 한 번입니다. 이것이 Chapter 16~18에서 다룰 "두려움 없는 동시성(Fearless Concurrency)"의 예고편입니다.
 
@@ -859,6 +973,128 @@ fn main() {
 ```
 
 인덱스가 정말 필요한 게 아니라면(예: 인접 원소 비교) 인덱스 자체를 쓰지 마세요. 두 컬렉션을 동시에 도는 `for i in 0..len { a[i] + b[i] }` 패턴은 `a.iter().zip(b.iter())`로 바꾸면 경계 검사도, 길이 불일치 버그도 사라집니다.
+
+### 함정 5: `filter(|&&x| ...)`의 이중 참조 — `&&i32`라는 낯선 타입
+
+파이썬 개발자가 Rust 이터레이터에서 가장 처음 당황하는 지점입니다. `v.iter()`의 `Item`은 `&i32`(원소를 빌린 참조)인데, `filter`는 클로저에 `Item` 자체가 아니라 `&Item`을 넘깁니다 — *원소를 소비하지 않고 술어만 검사*하기 위해서입니다. 그래서 `filter`의 클로저 인자는 `&&i32`, 즉 **참조의 참조(이중 참조)** 가 됩니다.
+
+```rust
+fn main() {
+    let v = vec![1, 2, 3, 4, 5, 6];
+
+    // 🚨 흔한 실수: x를 i32로 착각하고 그냥 산술 연산
+    let evens: Vec<&i32> = v.iter().filter(|x| x % 2 == 0).collect();
+    println!("{:?}", evens);
+}
+```
+
+`x`의 타입은 `&&i32`인데 `% 2`를 하려니 컴파일러가 막습니다.
+
+```text
+error[E0369]: cannot calculate the remainder of `&&{integer}` divided by `{integer}`
+ --> src/main.rs:5:50
+  |
+5 |     let evens: Vec<&i32> = v.iter().filter(|x| x % 2 == 0).collect();
+  |                                                - ^ - {integer}
+  |                                                |
+  |                                                &&{integer}
+  |
+help: `%` can be used on `&{integer}` if you dereference the left-hand side
+  |
+5 |     let evens: Vec<&i32> = v.iter().filter(|x| *x % 2 == 0).collect();
+  |                                                +
+```
+
+`cannot calculate the remainder of &&{integer}` — 에러가 정확히 "이중 참조에는 나머지 연산을 못 한다"고 알려줍니다. 해법은 두 겹을 벗기는 것입니다. **패턴 매칭으로 한 번에 벗기는 `|&&x|`가 관용적**입니다.
+
+```rust
+fn main() {
+    let v = vec![1, 2, 3, 4, 5, 6];
+
+    // ✅ 관용적: 패턴 |&&x| 로 두 겹의 참조를 한 번에 벗겨 x: i32 를 얻는다
+    let evens: Vec<&i32> = v.iter().filter(|&&x| x % 2 == 0).collect();
+    println!("{:?}", evens); // [2, 4, 6]
+
+    // 같은 의미, 역참조 방식 (덜 관용적)
+    let evens2: Vec<&i32> = v.iter().filter(|x| **x % 2 == 0).collect();
+    println!("{:?}", evens2);
+
+    // into_iter()면 Item = i32, filter 클로저는 &i32 → 한 겹만 벗긴다 |&x|
+    let evens3: Vec<i32> = v.into_iter().filter(|&x| x % 2 == 0).collect();
+    println!("{:?}", evens3);
+}
+```
+
+규칙을 정리하면: **참조 이터레이터(`iter()`)에 `filter`를 걸면 `|&&x|`, 소유 이터레이터(`into_iter()`)에 걸면 `|&x|`**. 반면 `map`은 `Item` 자체(`&i32` 또는 `i32`)를 넘기므로 한 겹만 벗기면 됩니다(`map(|&x| ...)` 또는 `map(|x| ...)`). `filter`만 인자 참조가 한 겹 더 깊다는 점이 핵심이며, 이는 "술어가 원소를 빌려서 보기만 한다"는 설계에서 나온 필연입니다. `clippy`는 이 패턴이 어긋날 때 `clippy::op_ref` 등으로 보조해줍니다.
+
+---
+
+## 15.10 연습문제
+
+읽기만 해서는 손에 붙지 않습니다. 아래 네 문제는 전부 *어댑터 + 소비자*의 조합으로 풀립니다. 각 문제는 먼저 손으로 풀어 보고(가능하면 `rustc`로 컴파일까지), 그다음 정답 스케치와 자기검증 값을 맞춰 보세요. Rustlings처럼 "컴파일이 통과하고 `assert_eq!`가 패닉 없이 끝나면 정답"입니다.
+
+### 문제 1 — `map` + `filter` + `sum`
+
+`vec![1, 2, 3, 4, 5, 6]`에서 **짝수만 골라 제곱한 뒤 모두 더한 값**을 구하는 한 줄 체인을 작성하세요. 중간 `Vec`을 만들지 말고 lazy 체인 하나로 끝내야 합니다.
+
+```rust
+fn main() {
+    let nums = vec![1, 2, 3, 4, 5, 6];
+    let answer: i32 = /* 여기에 체인 */;
+    assert_eq!(answer, 56);
+    println!("{}", answer);
+}
+```
+
+> **정답 스케치.** `iter()`의 `Item`은 `&i32`이므로 `filter`는 `|&&x|`, `map`은 `|&x|`로 참조를 벗깁니다. 핵심 한 줄: `nums.iter().filter(|&&x| x % 2 == 0).map(|&x| x * x).sum()`. 자기검증: `4 + 16 + 36 = 56`이 나오면 정답. `filter`에서 `|&x|`(한 겹만)로 쓰면 함정 5의 `error[E0369]: cannot calculate the remainder of &&{integer}...`를 보게 됩니다. `sum()`의 반환 타입 어노테이션(`: i32`)을 빼면 `error[E0283]: type annotations needed`(`cannot satisfy _: Sum<i32>`)가 뜨니, 소비자엔 타입을 달아 주세요.
+
+### 문제 2 — `fold`로 단어 빈도 세기
+
+문자열 `"the quick brown the lazy the"`를 공백으로 쪼개, **단어→등장 횟수** `HashMap`을 `fold` 하나로 만드세요. (`Counter`를 직접 손으로 만드는 셈입니다.)
+
+```rust
+use std::collections::HashMap;
+fn main() {
+    let text = "the quick brown the lazy the";
+    let freq: HashMap<&str, i32> = /* fold 체인 */;
+    assert_eq!(freq["the"], 3);
+}
+```
+
+> **정답 스케치.** `fold`의 초기값은 빈 맵, 누적 함수는 맵을 받아 갱신 후 *되돌려줘야* 합니다(소유권을 다시 반환). 핵심: `text.split_whitespace().fold(HashMap::new(), |mut acc, w| { *acc.entry(w).or_insert(0) += 1; acc })`. 자주 하는 실수는 마지막에 `acc`를 반환하지 않는 것 — 그러면 `error[E0308]: mismatched types`(클로저가 `()`를 반환해 누적 타입과 불일치)가 납니다. 자기검증: `freq["the"] == 3`, `freq["lazy"] == 1`.
+
+### 문제 3 — `collect`로 `Result` 모으기 (단축 평가)
+
+`&str` 슬라이스 `["10", "20", "30"]`을 `Vec<i32>`로 파싱하되, **하나라도 실패하면 전체를 `Err`로** 만드세요. 일일이 `match`하지 말고 `collect` 한 번으로 끝내야 합니다.
+
+```rust
+fn main() {
+    let good = ["10", "20", "30"];
+    let parsed: /* 타입? */ = good.iter().map(|s| s.parse::<i32>()).collect();
+    assert_eq!(parsed.unwrap(), vec![10, 20, 30]);
+
+    let bad = ["10", "x", "30"];
+    let parsed2: Result<Vec<i32>, _> = bad.iter().map(|s| s.parse::<i32>()).collect();
+    assert!(parsed2.is_err());
+}
+```
+
+> **정답 스케치.** 마법은 `FromIterator`가 `Result<Vec<T>, E>`에 대해 구현돼 있다는 것입니다. 목표 타입을 `Result<Vec<i32>, std::num::ParseIntError>`(또는 `Result<Vec<i32>, _>`)로 어노테이트하면, `collect`가 `Iterator<Item = Result<i32, E>>`를 *통째로 뒤집어* 첫 `Err`에서 단축 평가합니다. 자기검증: `good`은 `Ok([10, 20, 30])`, `bad`는 `"x"`에서 멈춰 `Err(ParseIntError)`. 타입을 `Vec<Result<i32, _>>`로 적으면 단축 평가 없이 *모든* 결과를 담은 벡터가 되니, 의도와 다른 타입을 적지 않도록 주의하세요.
+
+### 문제 4 — `zip` + `map` + `sum`으로 내적(dot product)
+
+길이가 같은 두 배열 `a = [1, 2, 3]`, `b = [4, 5, 6]`의 **내적**(원소별 곱의 합)을 인덱스 루프 없이 구하세요.
+
+```rust
+fn main() {
+    let a = [1, 2, 3];
+    let b = [4, 5, 6];
+    let dot: i32 = /* zip + map + sum */;
+    assert_eq!(dot, 32);
+}
+```
+
+> **정답 스케치.** `a.iter().zip(b.iter())`는 `(&i32, &i32)` 튜플 이터레이터를 만듭니다. `map(|(&x, &y)| x * y)`로 튜플을 분해하며 참조를 벗기고, `sum()`으로 합칩니다. 핵심: `a.iter().zip(b.iter()).map(|(&x, &y)| x * y).sum()`. 자기검증: `1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32`. `zip`은 짧은 쪽에서 멈추므로 길이가 달라도 패닉하지 않고 안전하게 잘립니다 — `for i in 0..a.len()` 인덱스 루프였다면 길이 불일치 시 경계 검사 패닉(`index out of bounds`)이 났을 코드를, `zip`이 컴파일 타임 안전성으로 바꿔 줍니다.
 
 ---
 

@@ -788,11 +788,265 @@ fn name_len(opt: &Option<String>) -> usize {
 
 `&Option<String>`을 `match`하면 패턴의 바인딩도 참조가 됩니다(`s: &String`). 이를 모르고 `Some(s) => consume(s)`처럼 값을 소비하려 하면 `error[E0507]: cannot move out of ...`을 만납니다. `opt.as_ref()`, `as_deref()`, 또는 `if let Some(s) = opt`(참조 바인딩)로 해결합니다. 소유권(Chapter 4)과 참조(Chapter 5)의 규칙이 `Option`/`Result`에도 그대로 적용된다는 점을 기억하세요.
 
+**함정 5: `?`로 전파하려는데 에러 타입이 다르다 (`error[E0277]`)**
+
+파이썬에서는 어떤 예외든 `try` 블록을 거슬러 올라갑니다 — `IOError`든 `ValueError`든 타입을 가리지 않고 자동 전파됩니다. 그 감각으로 Rust에서 `?`를 쓰면 가장 먼저 부딪히는 벽이 **에러 타입 통일**입니다. `?`는 "에러면 즉시 `return`"하되, 반환하기 직전에 발생한 에러를 **함수 시그니처의 에러 타입으로 `From` 변환**합니다. 변환할 방법(`From` 구현)이 없으면 컴파일이 막힙니다.
+
+```rust
+#[derive(Debug)]
+struct ConfigError;
+
+fn read_file() -> Result<String, std::io::Error> {
+    std::fs::read_to_string("config.txt")
+}
+
+// 반환 에러는 ConfigError인데, read_file()은 io::Error를 던진다.
+fn load() -> Result<u32, ConfigError> {
+    let s = read_file()?; // 🚨 From<std::io::Error> for ConfigError 없음
+    Ok(s.trim().parse::<u32>().unwrap_or(0))
+}
+```
+
+`rustc`의 정확한 거부 메시지:
+
+```text
+error[E0277]: `?` couldn't convert the error to `ConfigError`
+  --> e0277b.rs:11:24
+   |
+10 | fn load() -> Result<u32, ConfigError> {
+   |              ------------------------ expected `ConfigError` because of this
+11 |     let s = read_file()?; // 🚨 From<std::io::Error> for ConfigError 없음
+   |             -----------^ the trait `From<std::io::Error>` is not implemented for `ConfigError`
+   |             |
+   |             this can't be annotated with `?` because it has type `Result<_, std::io::Error>`
+   |
+note: `ConfigError` needs to implement `From<std::io::Error>`
+   = note: the question mark operation (`?`) implicitly performs a conversion on the error value using the `From` trait
+```
+
+마지막 `note`가 핵심입니다 — **`?`는 에러 값에 암묵적으로 `From` 변환을 수행한다.** 즉 `read_file()?`는 사실상 `match read_file() { Ok(v) => v, Err(e) => return Err(ConfigError::from(e)) }`로 풀립니다. 컴파일러는 `From<std::io::Error>`를 `ConfigError`에 대해 찾았지만 없으니 멈춘 것입니다. 해결책은 그 변환을 제공하는 것입니다.
+
+```rust
+impl From<std::io::Error> for ConfigError {
+    fn from(_: std::io::Error) -> Self {
+        ConfigError
+    }
+}
+// 이제 load()의 `?`가 io::Error -> ConfigError 자동 변환을 찾아 컴파일된다.
+```
+
+이것이 정확히 Chapter 13의 핵심 주제입니다. 여러 에러 타입(`io::Error`, `ParseIntError`, 커스텀 에러)을 하나의 함수에서 `?`로 전파하려면, 그 모두를 받아들이는 통합 에러 타입과 `From` 구현들이 필요하고, `thiserror`의 `#[from]` 속성이 그 `impl From`을 매크로로 자동 생성해 줍니다. 지금은 "`?`의 자동 전파는 공짜가 아니라 `From` 변환이라는 계약 위에 서 있다"는 것만 기억하면 충분합니다. 참고로 같은 에러 타입끼리(`Result<_, E>` 안에서 `Result<_, E>`를 `?`) 전파할 때는 `From<E> for E`(항등 변환)가 표준 라이브러리에 이미 있어 추가 작업 없이 동작합니다.
+
+---
+
+## 12.10 Option/Result 조합자와 Python 관용구 대응표
+
+조합자를 처음 만난 파이썬 개발자는 "이걸 다 외워야 하나" 싶지만, 대부분은 이미 손에 익은 파이썬 관용구의 타입 안전 버전입니다. 다음 표는 자주 쓰는 조합자를 파이썬 코드와 1:1로 맞춰 둔 치트시트입니다.
+
+| 조합자 | 의미 | Python 관용구 대응 |
+|--------|------|---------------------|
+| `opt.map(f)` | `Some(x)`면 `Some(f(x))`, `None`은 그대로 | `f(x) if x is not None else None` |
+| `res.map(f)` | `Ok(x)`면 `Ok(f(x))`, `Err`은 그대로 | `try: return f(x) except: raise`의 성공 변형부 |
+| `res.map_err(g)` | `Err(e)`면 `Err(g(e))`, `Ok`은 그대로 | `except E as e: raise F(e)` (예외 래핑) |
+| `opt.and_then(f)` | `Some(x)`면 `f(x)`(자체가 `Option`) | `f(x) if x is not None else None` (f도 None 가능) |
+| `res.and_then(f)` | `Ok(x)`면 `f(x)`(자체가 `Result`) | `try` 블록에 실패 가능 연산 두 개를 순차 나열 |
+| `opt.unwrap_or(d)` | `None`이면 `d` (항상 평가) | `x if x is not None else d` / `d.get(k, default)` |
+| `opt.unwrap_or_else(g)` | `None`이면 `g()` (지연 평가) | `x if x is not None else compute()` |
+| `opt.ok_or(e)` | `Option<T>` → `Result<T, E>` (부재를 실패로) | `if x is None: raise E` |
+| `opt.ok_or_else(g)` | 위와 같되 에러 지연 생성 | `if x is None: raise build_error()` |
+| `res.ok()` | `Result<T, E>` → `Option<T>` (실패를 부재로) | `try: return x except: return None` |
+| `opt.filter(p)` | 조건 통과한 `Some`만 유지 | `x if x is not None and p(x) else None` |
+| `opt.or_else(g)` | `None`이면 대체 `Option` 시도 | `os.environ.get("X") or fallback()` |
+| `opt_res.transpose()` | `Option<Result>` ↔ `Result<Option>` | (파이썬엔 대응 없음 — 중첩 구조 자체가 없음) |
+| `expr?` | `Ok`/`Some`면 꺼내고, 아니면 즉시 `return` (+ `From` 변환) | `try` 블록의 자동 전파 (단, 명시적 기호) |
+
+표에서 분명히 드러나는 것은, 파이썬에서 **별개의 두 메커니즘**(값 부재용 `None` 검사와 실패용 `try-except`)으로 흩어져 있던 패턴이 Rust에서는 **동일한 조합자 어휘**로 통합된다는 점입니다. `map`은 `Option`에도 `Result`에도 같은 이름으로 존재하고, 둘 사이의 변환(`ok_or`/`ok`)이 명시적 다리로 제공됩니다. 그래서 한 번 익히면 `Option`이든 `Result`든, 나아가 `Iterator`(Chapter 15)든 같은 사고로 다룰 수 있습니다 — 이것이 함수형 조합자의 학습 투자 회수율입니다.
+
+---
+
+## 12.11 Under the Hood: `match`와 `?`는 같은 기계어다 (어셈블리)
+
+12.7에서 약속한 어셈블리 비교를 지금 갚겠습니다. `?`가 "마법"이 아니라 우리가 손으로 쓰던 `match`의 **설탕(syntactic sugar)**일 뿐이라면, 둘은 최적화 후 동일한 기계어가 되어야 합니다. 실제로 그렇습니다.
+
+다음 두 함수는 의미가 같습니다 — 하나는 `?`로, 하나는 손으로 `match`해서 에러를 전파합니다.
+
+```rust
+#[derive(Debug)]
+pub struct ParseError;
+
+#[inline(never)]
+pub fn inner(x: i64) -> Result<i64, ParseError> {
+    if x < 0 { Err(ParseError) } else { Ok(x * 2) }
+}
+
+// ? 버전
+pub fn via_question(x: i64) -> Result<i64, ParseError> {
+    let v = inner(x)?;
+    Ok(v + 1)
+}
+
+// match 버전 (수동 전파)
+pub fn via_match(x: i64) -> Result<i64, ParseError> {
+    let v = match inner(x) {
+        Ok(v) => v,
+        Err(e) => return Err(e),
+    };
+    Ok(v + 1)
+}
+```
+
+`rustc -O --emit asm`(릴리스 최적화)으로 어셈블리를 뽑으면, 두 함수가 **글자 그대로 같은 코드**임을 컴파일러 스스로 선언합니다. AArch64(Apple Silicon) 출력의 끝부분입니다.
+
+```text
+_via_match:
+	stp	x29, x30, [sp, #-16]!
+	mov	x29, sp
+	bl	__ZN9asm_match5inner...E   ; inner() 호출
+	and	x0, x0, #0x1               ; 판별자(Ok/Err 태그) 비트
+	add	x1, x1, #1                 ; v + 1
+	ldp	x29, x30, [sp], #16
+	ret
+
+	.globl	_via_question
+.set _via_question, _via_match     ; ← via_question은 via_match의 별칭(alias)!
+```
+
+마지막 줄 `.set _via_question, _via_match`가 결정적 증거입니다. LLVM의 함수 병합(identical code folding 유사 동작)이 두 함수의 기계어가 **바이트 단위로 동일**함을 발견하고, `via_question`을 위한 별도의 코드를 생성하지 않은 채 `via_match`를 가리키는 심볼 별칭으로 만들어 버렸습니다. 즉 `?`와 손으로 쓴 `match` 전파는 같은 기계어로 수렴할 뿐 아니라, 컴파일러가 그 동일성을 인지해 코드를 한 벌만 남깁니다.
+
+본문에서 주목할 명령어는 단 두 개입니다 — `and`(판별자 비트 추출)와 조건 분기뿐입니다. 에러 전파의 정체는 "정수 태그를 검사하고 분기하는 것", CPU가 가장 잘하는 일입니다. 파이썬의 예외 전파처럼 예외 객체를 힙에 할당하거나 트레이스백 프레임을 잇는 일은 어디에도 없습니다.
+
+> **Under the Hood: `?`의 탈설탕(desugaring)**
+>
+> `inner(x)?`는 컴파일러 내부에서 대략 다음으로 풀립니다.
+>
+> ```rust
+> match inner(x) {
+>     Ok(v) => v,
+>     Err(e) => return Err(From::from(e)), // ← From 변환이 끼어든다
+> }
+> ```
+>
+> 함정 5에서 본 `From::from(e)`가 바로 여기 있습니다. 위 어셈블리 예제에서는 `inner`의 에러 타입(`ParseError`)과 `via_question`의 에러 타입(`ParseError`)이 같아서 `From<ParseError> for ParseError`(항등 변환)가 적용되고, 그 항등 변환은 인라인되어 사라집니다. 그래서 `via_match`(`return Err(e)`)와 `via_question`(`return Err(From::from(e))`)이 동일한 기계어가 된 것입니다. 에러 타입이 달라 실제 변환이 일어나는 경우라도, 그 변환 코드는 `match`로 직접 `Err(MyError::from(e))`를 썼을 때와 똑같이 생성됩니다. 즉 `?`는 단축 표기일 뿐, 추가 런타임 비용이 0입니다. 무비용 추상화(Zero-cost Abstraction)의 또 다른 증명입니다.
+
+---
+
+## 12.12 벤치마크: `Result` 분기 vs `panic!` 되감기
+
+12.6에서 "`Result` 분기는 정수 비교, `panic!` 되감기는 비싸다"고 주장했습니다. 이제 `criterion`으로 그 격차를 측정해 수치로 못박겠습니다. 같은 "콜스택 16단계를 거슬러 올라가는 에러"를 두 방식으로 구현합니다 — 하나는 `Result`를 `?`로 전파, 하나는 `panic!`을 `catch_unwind`로 받습니다.
+
+```rust
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+#[derive(Debug)]
+struct MyErr;
+
+// Result 분기: 실패도 그냥 값 반환
+fn result_chain(depth: u32) -> Result<u64, MyErr> {
+    if depth == 0 {
+        return Err(MyErr);
+    }
+    let v = result_chain(depth - 1)?;
+    Ok(v + 1)
+}
+
+// panic 되감기: 깊은 곳에서 panic, 최상위에서 catch_unwind로 받음
+fn panic_chain(depth: u32) -> u64 {
+    if depth == 0 {
+        panic!("bottom reached");
+    }
+    panic_chain(depth - 1) + 1
+}
+
+fn bench(c: &mut Criterion) {
+    const DEPTH: u32 = 16;
+
+    c.bench_function("result_err_depth16", |b| {
+        b.iter(|| black_box(result_chain(black_box(DEPTH)).is_err()))
+    });
+
+    c.bench_function("panic_unwind_depth16", |b| {
+        std::panic::set_hook(Box::new(|_| {})); // 패닉 메시지 억제
+        b.iter(|| {
+            let r = std::panic::catch_unwind(|| panic_chain(black_box(DEPTH)));
+            black_box(r.is_err())
+        })
+    });
+}
+
+criterion_group!(benches, bench);
+criterion_main!(benches);
+```
+
+`Cargo.toml`은 다음과 같습니다(되감기 모드 명시 — `panic = "abort"`면 `catch_unwind` 자체가 무의미해집니다).
+
+```toml
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "errbench"
+harness = false
+
+[profile.release]
+panic = "unwind"
+```
+
+`cargo bench`의 실측 결과(Apple Silicon, rustc 1.90.0, `--release`, 콜스택 깊이 16):
+
+```text
+result_err_depth16      time:   [538.25 ps 540.88 ps 543.97 ps]
+panic_unwind_depth16    time:   [5.9443 µs 6.0204 µs 6.1013 µs]
+```
+
+`Result` 실패 경로는 약 **0.54나노초**, `panic!` 되감기는 약 **6.0마이크로초**입니다. 비율로는 약 **11,000배**. 단위가 ps(피코초) 대 µs(마이크로초)로 다르다는 점에 주목하세요 — `Result` 분기는 CPU 사이클 한두 개 수준이라 사실상 측정 한계에 가깝고, `panic!`은 되감기 테이블을 따라 16개 프레임의 `Drop`을 정리하고 패닉 페이로드를 힙에 할당하는 실제 작업을 합니다.
+
+> **Under the Hood: 이 11,000배가 의미하는 것**
+>
+> 이 수치는 "`panic!`이 느리다"가 아니라 **"`panic!`을 흐름 제어에 쓰지 마라"**는 명령으로 읽어야 합니다. 6µs는 패닉 자체로는 충분히 빠릅니다 — 진짜 버그가 났을 때 한 번 죽는 비용으로는 무시할 만합니다. 문제는 이것을 루프 안에서 반복하는 경우입니다. 파이썬의 EAFP는 정확히 이 함정에 빠집니다: `StopIteration`으로 이터레이션을 끝내거나, 루프 안에서 `try/except KeyError`로 미스를 처리하면, 미스마다 예외 할당과 되감기가 일어납니다(12.6의 측정에서 50% 미스율 기준 약 2배 느렸던 것을 기억하세요). Rust는 이 둘을 구조적으로 분리합니다 — 일상적 실패는 `Result`(피코초급 분기)로, 진짜 버그는 `panic!`(마이크로초급 되감기, 단 한 번)로. 깊이를 16에서 32로 늘리면 `panic_unwind`는 거의 비례해 느려지지만(되감기는 스택 깊이에 비례) `result_err`는 거의 변하지 않습니다(분기는 깊이와 무관). 이것이 12.6 표의 "정상/실패 경로 비용이 둘 다 일정"이라는 행의 실측 근거입니다.
+
 ---
 
 이번 장에서 우리는 파이썬의 보이지 않는 두 함정 — Null(`None`)과 예외(Exception) — 을 Rust가 어떻게 타입 시스템 안으로 끌어들이는지 보았습니다. `Option<T>`은 부재를, `Result<T, E>`은 실패를 시그니처에 새기고, 컴파일러는 그 처리를 강제합니다. 니치 최적화 덕분에 이 안전성은 대부분 0바이트 추가 비용이며, `match`의 장황함은 `map`/`and_then`/`ok_or_else` 같은 모나드적 조합자로 평탄한 파이프라인이 됩니다. 그리고 우리는 복구 가능한 오류(`Result`)와 프로그래밍 버그(`panic!`)를 다른 채널로 분리하는 Rust의 규율을 배웠습니다.
 
 하지만 한 가지 고통이 남았습니다. 콜스택 깊은 곳에서 발생한 에러를 상위로 전파하려면 매번 `match`로 받아 `return Err(e)`를 해야 할까요? 12.7에서 슬쩍 등장한 `?` 연산자가 바로 그 보일러플레이트를 한 글자로 지워버립니다. 다음 Chapter 13에서는 `?`의 마법을 완전히 해부하고, 서로 다른 에러 타입을 `From` 트레이트로 자동 변환하는 메커니즘, 그리고 실무 표준인 `thiserror`(라이브러리용 구조화된 에러)와 `anyhow`(애플리케이션용 동적 에러)로 파이썬의 복잡한 커스텀 Exception 계층도를 어떻게 Rust 에러 설계로 마이그레이션하는지를 다룹니다.
+
+---
+
+## 연습문제
+
+손으로 풀어 보세요(Rustlings 스타일). 각 문항 아래의 "정답 스케치"는 핵심 아이디어와, 스스로 검증할 때 보게 될 컴파일러 에러코드 또는 측정값을 함께 제시합니다. 먼저 종이/에디터에서 풀고, `rustc`로 직접 컴파일해 검증하길 권합니다.
+
+**문제 1 — `match` 사슬을 조합자 한 줄로**
+
+`Vec<User>`(각 `User`는 `email: String`, `role: String`)에서 첫 번째 `role == "admin"`인 사용자의 이메일 도메인(`@` 뒤)을 대문자로 반환하되, admin이 없거나 이메일에 `@`가 없으면 `"NONE"`을 반환하는 `fn admin_domain(users: &[User]) -> String`을 `match` 없이 조합자 체인만으로 작성하세요.
+
+> **정답 스케치.** `iter().find(|u| u.role == "admin")`으로 `Option<&User>`를 얻고, `and_then(|u| u.email.split('@').nth(1))`로 도메인을 추출(부재 가능하므로 `and_then`), `map(|d| d.to_uppercase())`로 변형, `unwrap_or_else(|| "NONE".to_string())`로 마무리합니다. 핵심은 `map`(값→값)과 `and_then`(값→`Option`)의 구분입니다 — `nth`는 `Option`을 반환하므로 `map`을 쓰면 `Option<Option<&str>>` 중첩이 생겨 타입이 어긋납니다. 자기검증: `admin_domain(&[])`가 `"NONE"`, `boss@corp.com` admin이 있으면 `"CORP.COM"`.
+
+**문제 2 — 부재를 실패로 승격하고 `?`로 전파**
+
+`HashMap<String, String>`에서 키 `"a"`와 `"b"`를 모두 꺼내 `Result<(String, String), String>`을 반환하는 `fn two_keys`를 작성하세요. 키가 없으면 `"missing key: a"` 형태의 에러를 반환합니다. `?`를 사용하세요.
+
+> **정답 스케치.** 헬퍼 `m.get(k).ok_or_else(|| format!("missing key: {k}"))`로 `Option`을 `Result`로 승격한 뒤 `?`로 꺼냅니다. `let a = required(m, "a")?;`처럼요. 흔한 실수: 반환 타입을 `Result<(String, String), String>`로 두고 `&String`을 그대로 담으려 하면 수명/소유권 문제가 생기므로 `.clone()`이 필요합니다. 만약 헬퍼의 에러 타입과 함수 반환 에러 타입이 다르면 `?`에서 `error[E0277]`(`From` 미구현)를 보게 됩니다 — 12.9 함정 5의 그 에러입니다. 자기검증: `"b"` 제거 후 `two_keys(&m).unwrap_err() == "missing key: b"`.
+
+**문제 3 — 전부 성공 또는 첫 실패 (`collect`)**
+
+`&[&str]`의 모든 항목을 `i64`로 파싱해 `Result<Vec<i64>, ParseIntError>`를 반환하는 `fn parse_all`을 작성하세요. 하나라도 실패하면 그 첫 에러를, 모두 성공하면 `Vec`를 반환해야 합니다. `for` 루프나 `match` 없이.
+
+> **정답 스케치.** `items.iter().map(|s| s.parse::<i64>()).collect()` 한 줄입니다. 마법은 반환 타입 주석에 있습니다 — `Result<Vec<i64>, _>`로 주석하면 `FromIterator<Result<T, E>> for Result<Vec<T>, E>` 구현이 선택되어 "전부 성공 또는 첫 실패" 의미론이 자동 적용됩니다. 주석을 빼면 컴파일러가 어떤 `collect` 타깃인지 몰라 `error[E0282]`(type annotations needed)를 냅니다. 자기검증: `["1","2","3"]` → `Ok([1,2,3])`, `["1","x"]` → `is_err()`.
+
+**문제 4 — 선택적이지만 있으면 유효해야 함 (`transpose`)**
+
+`HashMap<String, String>`에서 키 `"count"`를 읽되, **있으면 반드시** `usize`로 파싱되어야 하고 **없으면 정상**인 의미를 `Result<Option<usize>, ParseIntError>`로 표현하는 `fn opt_count`를 작성하세요.
+
+> **정답 스케치.** `m.get("count").map(|s| s.parse::<usize>())`는 `Option<Result<usize, ParseIntError>>`(중첩!)입니다. 여기에 `.transpose()`를 붙이면 `Result<Option<usize>, ParseIntError>`로 뒤집힙니다 — 이것이 정확히 "선택적이되 있으면 유효"의 타입입니다. 자기검증: 키 없음 → `Ok(None)`, `"7"` → `Ok(Some(7))`, `"nope"` → `is_err()`. 파이썬에는 이 중첩 구조 자체가 없어 처음엔 낯설지만, `transpose`는 12.7 실전 파서의 `workers` 처리에서 이미 등장한 핵심 도구입니다.
+
+**문제 5 — 다단계 검증을 `and_then`으로 연결**
+
+문자열을 받아 (1) `u16`으로 파싱하고 (2) `>= 1024`인지 검증하는 `fn parse_port(s: &str) -> Result<u16, String>`를, 두 단계를 `and_then`으로 연결해 작성하세요. 숫자가 아니면 `"not a number: ..."`, 예약 포트면 `"reserved: 80"` 형태의 에러를 반환합니다.
+
+> **정답 스케치.** `s.trim().parse::<u16>().map_err(|e| format!("not a number: {e}")).and_then(|p| if p >= 1024 { Ok(p) } else { Err(format!("reserved: {p}")) })`. 핵심은 `map_err`로 먼저 에러 타입을 `String`으로 통일해야 `and_then`이 같은 `Result<u16, String>` 타입으로 이어진다는 점입니다 — `map_err` 없이 `and_then`을 붙이면 `ParseIntError`와 `String` 에러 타입이 충돌해 `error[E0308]`(mismatched types)을 만납니다. `and_then`은 "또 실패할 수 있는 연산"을 잇는 모나드 bind입니다. 자기검증: `"8080"` → `Ok(8080)`, `"80"` → `Err("reserved: 80")`, `"abc"` → `is_err()`.
+
+다섯 문항의 정답 코드를 한 파일에 모아 `assert_eq!`로 묶으면 `cargo run`(또는 `rustc -O`) 한 번으로 전부 검증됩니다. 위 다섯 함수는 모두 실제로 컴파일·실행해 통과를 확인했습니다.
 
 ---
 
@@ -803,3 +1057,8 @@ fn name_len(opt: &Option<String>) -> usize {
 - https://doc.rust-lang.org/std/result/enum.Result.html
 - https://doc.rust-lang.org/rust-by-example/error/option_unwrap.html
 - https://doc.rust-lang.org/book/ch09-02-recoverable-errors-with-result.html
+- https://doc.rust-lang.org/reference/expressions/operator-expr.html#the-question-mark-operator
+- https://doc.rust-lang.org/error_codes/E0277.html
+- https://doc.rust-lang.org/std/option/enum.Option.html#method.transpose
+- https://doc.rust-lang.org/std/panic/fn.catch_unwind.html
+- https://bheisler.github.io/criterion.rs/book/

@@ -167,7 +167,38 @@ fn main() {
 }
 ```
 
-차이가 보이나요? 파이썬의 혼합 리스트는 "런타임에 무엇이든 들어올 수 있고 무엇이 들어왔는지는 꺼내봐야 안다"입니다. Rust의 `Vec<SpreadsheetCell>`은 "들어올 수 있는 변형은 Int/Float/Text 셋뿐이고, `match`로 모든 경우를 다루지 않으면 컴파일되지 않는다"입니다. 가능성의 집합이 타입에 박제됩니다. 그리고 `Vec`의 각 슬롯은 가장 큰 변형(여기서는 `String`, 24바이트)에 태그 바이트를 더한 크기로 통일되며, 이 역시 연속 버퍼입니다.
+차이가 보이나요? 파이썬의 혼합 리스트는 "런타임에 무엇이든 들어올 수 있고 무엇이 들어왔는지는 꺼내봐야 안다"입니다. Rust의 `Vec<SpreadsheetCell>`은 "들어올 수 있는 변형은 Int/Float/Text 셋뿐이고, `match`로 모든 경우를 다루지 않으면 컴파일되지 않는다"입니다. 가능성의 집합이 타입에 박제됩니다. 그리고 `Vec`의 각 슬롯은 모든 변형을 담을 수 있는 단일 크기로 통일되며, 이 역시 연속 버퍼입니다. 그런데 그 "단일 크기"가 정확히 몇 바이트인지는 직관과 다릅니다. 바로 다음 박스에서 `size_of`로 직접 재 봅니다.
+
+> **Under the Hood: enum의 크기 — 니치(Niche) vs 태그+패딩**
+>
+> 흔한 오해는 "enum 크기 = 가장 큰 변형 + 태그 1바이트"라는 것입니다. 실제로는 그렇지 않을 때가 많습니다. `SpreadsheetCell`을 그대로 `std::mem::size_of`로 재면 다음과 같습니다(rustc 1.96, 64비트).
+>
+> ```rust
+> use std::mem::size_of;
+>
+> enum SpreadsheetCell {  // String 변형 보유
+>     Int(i64),
+>     Float(f64),
+>     Text(String),
+> }
+>
+> enum NumCell {          // 숫자 변형만
+>     Int(i64),
+>     Float(f64),
+> }
+>
+> fn main() {
+>     println!("{}", size_of::<String>());          // 24
+>     println!("{}", size_of::<SpreadsheetCell>()); // 24  ← String과 같다!
+>     println!("{}", size_of::<NumCell>());         // 16  ← 태그(8) + 데이터(8)
+> }
+> ```
+>
+> `SpreadsheetCell`은 가장 큰 변형인 `String`(24바이트)과 **정확히 같은 24바이트**입니다. 태그를 위한 추가 바이트가 0입니다. 비결은 **니치 최적화(Niche Optimization)**입니다. `String`은 내부에 비-null·정렬된 힙 포인터를 갖는데, 그 포인터가 절대 가질 수 없는 비트 패턴("니치")이 존재합니다. 컴파일러는 이 사용되지 않는 비트 패턴에 `Int`/`Float`/`Text`를 구분하는 판별자(discriminant)를 끼워 넣습니다. 그래서 별도 태그 워드가 필요 없습니다.
+>
+> 반면 `NumCell`은 `i64`와 `f64`만 담는데, 이 둘은 **모든 비트 패턴을 정상값으로 사용**하므로 끼워 넣을 니치가 없습니다. 결국 판별자를 위한 별도 워드가 필요하고, 정렬(alignment) 때문에 1바이트 태그가 8바이트로 패딩되어 `8(태그) + 8(데이터) = 16`이 됩니다. 이것이 "태그+패딩" 레이아웃입니다.
+>
+> 정리하면, **포인터·`bool`·`char`처럼 니치를 가진 타입을 변형에 품으면 enum이 공짜로 작아지고, 순수 숫자 변형만 있으면 태그 워드 비용을 치릅니다.** `Option<&T>`가 8바이트(`None`을 null 포인터로 인코딩), `Option<String>`이 24바이트로 `String`과 똑같은 것도 전부 같은 니치 메커니즘입니다. `Vec<SpreadsheetCell>`의 한 슬롯은 32바이트가 아니라 24바이트이며, 100만 개를 담아도 24MB이지 32MB가 아닙니다.
 
 ### `with_capacity`와 증폭 성장
 
@@ -215,6 +246,38 @@ fn main() {
 ```
 
 파이썬에서 `[0] * n`이나 리스트 컴프리헨션이 빈 리스트 `append` 반복보다 빠른 것과 동일한 원리입니다. 다만 Rust는 `with_capacity`라는 명시적 도구를 줍니다.
+
+### 표준 라이브러리의 실제 성장 규칙
+
+"가득 차면 2배"는 절반만 맞습니다. **첫 번째** 할당량은 원소 크기에 따라 달라집니다. 표준 라이브러리의 `RawVec`은 `min_non_zero_cap`이라는 상수로 첫 할당을 결정하는데, 이를 다양한 타입으로 직접 측정하면 다음과 같습니다(rustc 1.96).
+
+```rust
+fn first_cap<T: Default>() -> usize {
+    let mut v: Vec<T> = Vec::new();
+    v.push(T::default());
+    v.capacity()
+}
+
+fn main() {
+    println!("{}", first_cap::<u8>());        // 8
+    println!("{}", first_cap::<u16>());       // 4
+    println!("{}", first_cap::<i64>());       // 4
+    println!("{}", first_cap::<[u8; 1024]>()); // 4
+    println!("{}", first_cap::<[u8; 1025]>()); // 1
+}
+```
+
+| 원소 크기 | 첫 할당 용량 | 이후 성장 | 근거 |
+|---|---|---|---|
+| ≤ 1바이트 (`u8`, `String`의 바이트) | 8 | ×2 | 작은 원소는 8개를 미리 잡아 재할당 횟수 절감 |
+| 2~1024바이트 (`u16`, `i64`, 대부분의 구조체) | 4 | ×2 | 균형점 |
+| > 1024바이트 (대형 구조체/배열) | 1 | ×2 | 큰 원소는 과할당 낭비가 크므로 1개부터 |
+
+핵심은 **첫 할당 이후로는 모든 타입이 엄격히 2배(amortized 배수 = 2.0)로 자란다**는 것입니다. 그래서 14.3 앞부분에서 본 `Vec<i64>`의 `0 → 4 → 8 → 16 → 32 → ...`와, `String`(= `Vec<u8>`이므로 원소 1바이트)의 `0 → 8 → 16 → 32 → ...`가 첫 단계만 다르고 그 뒤로는 똑같이 더블링합니다. 파이썬 `list`의 약 1.125배 성장(`newsize + (newsize >> 3) + 6` 반올림 공식)과 비교하면, Rust의 2배 전략은 재할당 **횟수**를 더 줄이는 대신 일시적 메모리 과할당은 더 큽니다. 평균적으로 원소 하나당 복사 횟수가 더 적다는 뜻입니다(2배 더블링의 amortized 복사 횟수는 원소당 2회 미만).
+
+> **Under the Hood: amortized 복사 비용**
+>
+> 빈 `Vec`에 `n`개를 `push`하면 재할당은 `log₂(n)`번 일어나고, 매 재할당마다 그 시점의 원소 전부를 복사합니다. 2배 더블링이라면 총 복사량은 `1 + 2 + 4 + ... + n/2 + n ≈ 2n`, 즉 원소 하나당 평균 **2회 미만** 복사입니다(기하급수의 합). 그래서 `push`가 평균(amortized) O(1)인 것입니다. 반대로 만약 성장 배수를 1.1배처럼 작게 잡으면 재할당이 훨씬 자주 일어나 총 복사량이 커집니다 — 파이썬이 메모리를 아끼는 대신 치르는 비용입니다. `with_capacity(n)`은 이 `2n` 복사를 통째로 0으로 만듭니다.
 
 ### 인덱싱: `[]` vs `get()`
 
@@ -841,6 +904,71 @@ fn main() {
 
 수치를 신뢰성 있게 재려면 `criterion` 크레이트를 쓰세요. 워밍업, 이상치 제거, 통계적 신뢰구간을 자동으로 처리해 줍니다. 단순 `Instant::now()` 측정은 JIT 없는 Rust에서도 캐시 상태와 빌드 모드(`--release` 필수)에 크게 흔들립니다.
 
+### criterion 재현 하니스: `with_capacity`의 값을 직접 측정한다
+
+다음은 그대로 복사해 돌릴 수 있는 `criterion` 하니스입니다. "빈 `Vec`에 push(재할당 발생)" vs "`with_capacity` 후 push(재할당 0회)" vs "연속 버퍼 합산"을 비교합니다.
+
+```toml
+# Cargo.toml
+[dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "vec_ops"
+harness = false
+```
+
+```rust
+// benches/vec_ops.rs
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+
+const N: usize = 1_000_000;
+
+fn push_grow() -> Vec<i64> {
+    let mut v: Vec<i64> = Vec::new();     // 재할당 ~20회 발생
+    for i in 0..N as i64 {
+        v.push(i);
+    }
+    v
+}
+
+fn push_reserved() -> Vec<i64> {
+    let mut v: Vec<i64> = Vec::with_capacity(N); // 재할당 0회
+    for i in 0..N as i64 {
+        v.push(i);
+    }
+    v
+}
+
+fn sum_iter(data: &[i64]) -> i64 {
+    data.iter().sum()
+}
+
+fn bench_vec(c: &mut Criterion) {
+    let mut g = c.benchmark_group("vec_ops");
+    g.bench_function("push_grow", |b| b.iter(push_grow));
+    g.bench_function("push_reserved", |b| b.iter(push_reserved));
+
+    let data: Vec<i64> = (0..N as i64).collect();
+    // black_box로 컴파일러가 결과를 상수 폴딩하지 못하게 막는다
+    g.bench_function("sum_iter", |b| b.iter(|| sum_iter(black_box(&data))));
+    g.finish();
+}
+
+criterion_group!(benches, bench_vec);
+criterion_main!(benches);
+```
+
+`cargo bench`로 실행한 실측 결과입니다(Apple Silicon, `--release`. 절대값은 머신마다 다르지만 배수는 일관적입니다).
+
+```text
+vec_ops/push_grow       time:   [1.0500 ms 1.0713 ms 1.1020 ms]
+vec_ops/push_reserved   time:   [539.83 µs 545.64 µs 551.66 µs]
+vec_ops/sum_iter        time:   [74.034 µs 74.419 µs 74.842 µs]
+```
+
+읽어낼 사실이 둘 있습니다. 첫째, **`with_capacity`가 빈 `Vec` 성장 대비 약 2배 빠릅니다**(1.07ms → 0.55ms). 앞 절의 "amortized 2n 복사"가 시간으로 환산되는 지점입니다 — 최종 크기를 알 때 `with_capacity`를 쓰는 것은 마이크로 최적화가 아니라 기본기입니다. 둘째, 1,000만이 아닌 100만 개 `i64` 합산이 **74µs**로, 14.8 첫 벤치(1,000만 개 3~5ms)와 선형으로 맞아떨어집니다. `black_box`를 빼면 컴파일러가 `sum_iter`의 결과를 컴파일 타임 상수로 접어버려 측정이 0에 수렴하니, 벤치에서는 반드시 입력이나 출력 중 하나를 `black_box`로 감싸세요.
+
 ---
 
 ## 14.9 Best Practices & 안티패턴
@@ -902,7 +1030,61 @@ fn first_word(s: &str) -> &str {
 
 파이썬 `dict`가 빠르다는 인상 때문에, Rust `HashMap`도 당연히 빠를 거라 가정하고 정수 키 수천만 개로 핫 루프를 돌리다가 의외로 느린 결과에 당황하는 경우입니다. 원인은 기본 해셔 SipHash의 암호학적 강도 비용입니다(14.5). 외부 입력이 키가 아닌 내부 정수/짧은 문자열 키라면 `ahash`로 교체해 2~8배를 회수하세요. 반대로, 외부 신뢰 불가 입력을 키로 받으면서 성능을 위해 `fxhash`로 바꾸는 것은 DoS 문을 여는 일이니 절대 하지 마세요.
 
-**함정 4: 순회 중 컬렉션 수정.**
+**함정 4: `into_iter` / `iter` / `iter_mut`를 혼동해 컬렉션을 통째로 잃기.**
+
+파이썬에서 `for x in items:`는 컨테이너를 소비하지 않습니다. 순회가 끝나도 `items`는 멀쩡합니다. 그래서 Rust에서도 무심코 `for s in v`라고 쓰는데, 이 구문은 사실 `v.into_iter()`로 **탈설탕(desugar)되어 `v`의 소유권을 가져갑니다**. 순회 후 `v`를 다시 쓰면 컴파일 에러입니다.
+
+```rust
+fn main() {
+    let v = vec![String::from("a"), String::from("b")];
+    for s in v.into_iter() {   // for s in v 와 동일 — v를 move
+        println!("{}", s);
+    }
+    println!("{}", v.len());   // 🚨 컴파일 에러! v는 이미 move됨
+}
+```
+
+`rustc`의 실제 출력입니다.
+
+```text
+error[E0382]: borrow of moved value: `v`
+ --> src/main.rs:7:20
+  |
+2 |     let v = vec![String::from("a"), String::from("b")];
+  |         - move occurs because `v` has type `Vec<String>`, which does not implement the `Copy` trait
+...
+4 |     for s in v.into_iter() {
+  |                ----------- `v` moved due to this method call
+...
+7 |     println!("{}", v.len());
+  |                    ^ value borrowed here after move
+  |
+note: `into_iter` takes ownership of the receiver `self`, which moves `v`
+```
+
+`into_iter takes ownership of the receiver self` — 이 한 줄이 정확한 진단입니다. 세 메서드의 차이를 시그니처로 기억하세요.
+
+| 메서드 | 받는 형태 | 순회 아이템 | 컬렉션 운명 | `for` 설탕 |
+|---|---|---|---|---|
+| `iter()` | `&self` | `&T` (읽기) | 그대로 유효 | `for x in &v` |
+| `iter_mut()` | `&mut self` | `&mut T` (제자리 수정) | 그대로 유효 | `for x in &mut v` |
+| `into_iter()` | `self` | `T` (소유) | **소비됨(move)** | `for x in v` |
+
+```rust
+fn main() {
+    let mut v = vec![1, 2, 3];
+    for x in v.iter() { print!("{} ", x); }     // &i32, v 유지
+    for x in v.iter_mut() { *x *= 10; }          // &mut i32, 제자리 수정
+    println!("{:?}", v);                          // [10, 20, 30]
+    let total: i32 = v.into_iter().sum();         // i32, 여기서 v 소비
+    println!("{}", total);                        // 60
+    // 이 줄 이후 v는 사용 불가
+}
+```
+
+규칙: **읽기만 하면 `&v`(iter), 제자리에서 고치면 `&mut v`(iter_mut), 컬렉션을 해체해 원소를 가져가야 할 때만 `v`(into_iter)를 쓰고 그건 마지막 사용이어야 합니다.** 소유한 원소가 필요한데 컬렉션도 유지하고 싶다면 `v.iter().cloned()`로 복제하거나, 애초에 `&T`로 충분한지 다시 검토하세요. 이 E0382는 Chapter 4 소유권 규칙이 컬렉션 순회에서 가장 자주 튀어나오는 형태입니다.
+
+**함정 5: 순회 중 컬렉션 수정.**
 
 ```python
 # Python — 런타임 RuntimeError 가능
@@ -917,6 +1099,85 @@ Rust에서는 이것이 **컴파일 에러**입니다. `for x in &v`로 불변 �
 let mut v = vec![1, 2, 3, 4, 5];
 v.retain(|&x| x % 2 == 0); // 짝수만 남김 → [2, 4]
 ```
+
+---
+
+## 14.11 연습문제
+
+손으로 풀어 보세요. Rustlings처럼, 먼저 시그니처만 보고 본문을 덮은 채 직접 채워 넣은 뒤, 정답 스케치와 비교하면 학습 효과가 큽니다. 각 문항의 핵심은 **소유(`String`/`Vec<T>`)와 대여(`&str`/`&[T]`)를 언제 선택하는가**입니다.
+
+**문제 1 (`&str` 대여 — 할당 0회).** 공백으로 구분된 문장에서 가장 긴 단어를 반환하는 함수를 작성하세요. 입력과 반환 모두 새 `String`을 할당하지 않아야 합니다. 시그니처를 직접 채우세요.
+
+```rust
+fn longest_word(text: ???) -> ??? {
+    // text 안의 단어들 중 가장 긴 것을 "그대로 가리켜서" 반환
+}
+```
+
+> **정답 스케치.** 반환 타입을 `String`으로 잡으면 `.to_string()`이 강제되어 할당이 생깁니다. 정답은 입력 슬라이스의 일부를 가리키는 `&str`을 반환하는 것입니다.
+>
+> ```rust
+> fn longest_word(text: &str) -> &str {
+>     text.split_whitespace()
+>         .max_by_key(|w| w.len())
+>         .unwrap_or("")
+> }
+> ```
+>
+> 자기검증: `longest_word("aa bbbb cc")`는 `"bbbb"`입니다. 함정 하나 — `max_by_key`는 **동률일 때 마지막 최댓값**을 돌려줍니다. 그래서 `longest_word("the quick brown fox")`는 5글자 동률인 `quick`이 아니라 뒤에 나온 `brown`을 반환합니다. 반환 타입을 `String`으로 잘못 잡으면 `.to_string()`을 빼먹었을 때 `error[E0308]: mismatched types (expected String, found &str)`를 만납니다. 수명(lifetime)은 생략 규칙으로 `fn longest_word<'a>(text: &'a str) -> &'a str`이 자동 추론됩니다.
+
+**문제 2 (`HashMap` Entry API — 키는 대여).** 단어 빈도를 세는 함수를 작성하세요. 키를 위해 `String`을 새로 할당하지 말고 입력 슬라이스를 대여하세요.
+
+```rust
+use std::collections::HashMap;
+fn word_count(text: ???) -> HashMap<???, u32> { ??? }
+```
+
+> **정답 스케치.** 키 타입을 `String`이 아니라 `&str`로 두면 각 단어마다 힙 할당이 0회입니다. 반환 맵의 키 수명은 입력 `text`에 묶입니다.
+>
+> ```rust
+> fn word_count(text: &str) -> HashMap<&str, u32> {
+>     let mut counts: HashMap<&str, u32> = HashMap::new();
+>     for w in text.split_whitespace() {
+>         *counts.entry(w).or_insert(0) += 1; // 해시 1회 계산
+>     }
+>     counts
+> }
+> ```
+>
+> 자기검증: `word_count("a b a c a")["a"] == 3`. `if counts.contains_key(w) { ... } else { ... }`로 짜면 해시를 두 번 계산합니다 — `entry`가 정답입니다. 만약 `HashMap<String, u32>`로 바꾸면 `entry(w)`에서 `&str`을 `String`으로 넣을 수 없어 `entry(w.to_string())`이 강제되고, 그 순간 단어마다 할당이 부활합니다.
+
+**문제 3 (`Vec` 소비 — `into_iter` move).** `Vec<i32>`를 받아 짝수만 남긴 **새 `Vec`**를 반환하세요. 원본을 대여하지 말고 소비(소유권 이전)하세요. 반환 후 원본을 다시 쓰면 어떤 에러가 날지 예측해 보세요.
+
+```rust
+fn evens(v: ???) -> Vec<i32> { ??? }
+```
+
+> **정답 스케치.** 소유권을 받았으니 `into_iter()`로 원소를 `i32`(참조가 아닌 값)로 꺼내 `filter` 후 `collect`합니다.
+>
+> ```rust
+> fn evens(v: Vec<i32>) -> Vec<i32> {
+>     v.into_iter().filter(|&x| x % 2 == 0).collect()
+> }
+> ```
+>
+> 자기검증: `evens(vec![1,2,3,4,5,6]) == vec![2,4,6]`. 호출부에서 `let original = vec![1,2,3]; let e = evens(original); println!("{:?}", original);`처럼 `evens`에 넘긴 뒤 `original`을 다시 쓰면 `error[E0382]: borrow of moved value: original`이 납니다(`Vec<i32>`는 `Copy`가 아니므로 move). 원본을 유지하고 싶다면 시그니처를 `fn evens(v: &[i32]) -> Vec<i32>`로 바꾸고 `v.iter().filter(|&&x| ...).copied().collect()`를 쓰세요.
+
+**문제 4 (`&str` UTF-8 — 안전한 첫 글자).** 문자열의 첫 "글자"를 안전하게 반환하세요. 빈 문자열, 한글, 이모지가 들어와도 패닉하면 안 됩니다. `s[0]`이나 `&s[0..1]`을 쓰면 왜 틀리는지 설명할 수 있어야 합니다.
+
+```rust
+fn first_char(s: &str) -> Option<char> { ??? }
+```
+
+> **정답 스케치.** `s[0]`은 `error[E0277]: the type str cannot be indexed by {integer}`로 컴파일조차 안 됩니다. `&s[0..1]`은 ASCII면 되지만 한글(`'안'`은 3바이트)에서 `byte index 1 is not a char boundary` 패닉입니다. 정답은 `chars()` 이터레이터의 첫 원소입니다.
+>
+> ```rust
+> fn first_char(s: &str) -> Option<char> {
+>     s.chars().next()
+> }
+> ```
+>
+> 자기검증: `first_char("안녕") == Some('안')`, `first_char("") == None`. `chars()`는 UTF-8을 디코딩하며 글자 경계를 정확히 인식하므로 멀티바이트에서도 안전하고, 빈 문자열이면 `None`을 돌려주어 `unwrap` 없이도 패닉이 없습니다. "n번째 글자"가 필요하면 `s.chars().nth(n)`이며, 이는 앞에서부터 세므로 O(n)입니다(14.4의 "O(1) 인덱싱 불가" 그대로).
 
 ---
 
