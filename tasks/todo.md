@@ -65,29 +65,33 @@
 - 신규 챕터는 **뒤에 덧붙여(23~)** 기존 번호·상호참조를 깨지 않는다.
 
 ## Phase A — 감사(Audit)
-- [ ] 28개 파일 병렬 감사 → DoD 점수 + 파일별 고가치 추가안 블루프린트
-- [ ] 종합본을 todo에 반영(아래 Phase B/C 구체화)
+- [x] 28개 파일 병렬 감사 → DoD 점수 + 파일별 고가치 추가안 블루프린트
+- [x] 종합본 확보(워크플로 ws2gn5cnr) → 측정 기반 ground-truth 확정
 
 ## Phase B — 기존 심화 확장 (병렬 웨이브, 웨이브마다 commit+push)
-- [ ] Wave 1: Ch 1–6
-- [ ] Wave 2: Ch 7–11
-- [ ] Wave 3: Ch 12–15
-- [ ] Wave 4: Ch 16–18
-- [ ] Wave 5: Ch 19–22
-- [ ] Wave 6: frontmatter + 부록 A~E (특히 D 코드 예제, A/E 보강)
+- [x] Wave 1: Ch 1–6 (커밋 264fea6)
+- [x] Wave 2: Ch 7–11 (커밋 f0fc1e7)
+- [x] Wave 3: Ch 12–15 (커밋 409ecca)
+- [ ] **남음** Ch 16 (2차 워크플로에서 부분 편집 +37줄만 되어 revert함 → 재실행 필요)
+- [ ] **남음** Ch 17–18
+- [ ] **남음** Ch 19–22
+- [ ] **남음** frontmatter + 부록 A~E (특히 D 코드 예제, A/E 보강, Python 버전 3.13.6 통일)
 
 ## Phase C — 신규 추가
-- [ ] Part 9. 프로덕션으로 가는 길
-  - [ ] Ch 23. 테스트와 문서화 (`pytest`를 넘어 — unit/integration/doc test, proptest, criterion)
-  - [ ] Ch 24. CLI 애플리케이션 (`argparse`/`click` → `clap`)
-  - [ ] Ch 25. 웹 서비스 (`FastAPI` → `Axum`)
-  - [ ] Ch 26. 성능 엔지니어링 (프로파일링·`criterion`·SIMD·캐시·`#[inline]`)
-- [ ] 부록 F. 용어집(Glossary) — 한국어(English) 정의 + 상호참조
-- [ ] (재량) 연습문제 해답집 / 상호참조·색인 보강
-- [ ] README.md · BOOK_TOC.md · frontmatter 내비게이션 동기화
+- [x] Part 9. 프로덕션으로 가는 길 (커밋 7777001)
+  - [x] Ch 23. 테스트와 문서화 / Ch 24. CLI / Ch 25. 웹(Axum) / Ch 26. 성능
+- [x] 부록 F. 용어집(Glossary) (커밋 0c7bd38)
+- [x] README.md · BOOK_TOC.md 내비게이션 동기화 (커밋 de1067f)
+- [ ] **남음** frontmatter 내비게이션(Part 9·Ch23-26·부록 F 링크) — frontmatter 심화와 함께 처리
 
-## Phase D — 검증·마무리
-- [ ] 신규/추가 Rust 코드 컴파일 검증(rustc/cargo 1.90)
-- [ ] 상호참조·링크·용어 일관성 점검
-- [ ] 분량 재집계(음절/코드/페이지 환산)
+## Phase D — 검증·마무리 (전부 남음)
+- [ ] 신규/추가 Rust 코드 컴파일 재검증(rustc/cargo 1.90)
+- [ ] 상호참조·링크(특히 신규 챕터→기존 챕터, 부록 F→챕터)·용어 일관성 점검
+- [ ] 분량 재집계(음절/코드/페이지 환산) → README/BOOK_TOC 수치 확정
 - [ ] 최종 commit/push + Review 기록
+
+## ⚠️ 중단 사유 및 재개 메모 (2026-06-15)
+- **세션 사용 한도 도달**(reset: 07:00 Asia/Seoul). 2차 심화 워크플로(wkw74b4z5)와 신규콘텐츠(ws0sz23yd)가 진행 중 한도로 다수 에이전트 실패.
+- **현재 커밋된 상태(안전)**: Ch1–15 심화 완료, Part 9(Ch23–26)+부록 F 신규 완료, README/BOOK_TOC 갱신 완료. 모두 origin/main 푸시됨.
+- **주의**: 2차 워크플로가 args 필터를 무시하고 Ch1–11을 재처리해 일부 중복 섹션(ch02 크로스컴파일, ch03 추론 정지, ch08 다중상속)이 생겨 **Ch1–11 미커밋 변경은 전량 revert**함(1차 심화본이 정본). Ch16 부분편집·Ch9 재심화도 revert.
+- **재개 시(한도 회복 후)**: 위 'Phase B 남음' 파일들을 deepen 워크플로(scriptPath: …/deepen-book-wf_e505248d-af1.js, args=[해당 파일들])로 실행 → 웨이브별 커밋/푸시. 이때 **반드시 깨끗한 HEAD 기준**(이미 심화된 Ch1–15는 args에서 제외)으로만 실행해 재중복 방지. 이후 Phase C frontmatter 네비 + Phase D 검증.
