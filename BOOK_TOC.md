@@ -3,8 +3,8 @@
 ## 기획 의도 및 집필 방향
 * **타겟 독자**: 10년 차 이상의 Python 백엔드/데이터 엔지니어 (CS 전공자)
 * **핵심 컨셉**: "기초 문법 나열"이 아닌, **"Python 코드와의 1:1 대응 및 내부 메모리 구조/어셈블리 관점의 예제 중심 비교"**
-* **분량**: 총 8부, 22장 + 서문 + 부록 5종으로 구성된 약 600페이지 분량의 심도 있는 기술 서적.
-* **집필 현황**: 22개 챕터 본문, 서문, 부록 5종 모두 작성 완료. 모든 Rust 예제·컴파일러 에러는 실제 `rustc`/`cargo`로 검증.
+* **분량**: 총 9부, 26장 + 서문 + 부록 6종으로 구성된 약 750페이지 분량의 심도 있는 기술 서적.
+* **집필 현황**: 26개 챕터 본문, 서문, 부록 6종 작성 완료. 모든 Rust 예제·컴파일러 에러는 실제 `rustc`/`cargo`로 검증. (Part 1~5 및 Part 9는 측정 기반 심화 확장 완료, Part 6~8·부록 A~E 심화 진행 중.)
 
 ---
 
@@ -109,12 +109,30 @@
   * Python 객체를 Rust에서 조작하기 (PyAny, PyDict 등) 및 GIL 릴리즈
   * [예제] Python `pandas`로 느린 병목 구간의 데이터 처리를 Rust + PyO3로 모듈화하여 50배 최적화하기
 
+### Part 9: 프로덕션으로 가는 길 (From Language to Production)
+**목표**: 언어를 익혔으니 실제로 출시한다 — 테스트·문서화·CLI·웹 서비스·성능 튜닝을 Python 도구 경험에 1:1로 대응시켜 마스터하기
+* **[Chapter 23. 테스트와 문서화: `pytest`를 넘어서](./chapters/chapter_23.md)**
+  * `#[test]`/`#[cfg(test)]` 인라인 테스트, `cargo test`가 unit+integration+doctest를 한 번에
+  * 문서화 테스트(doctest): `///` 예제가 실제로 컴파일·실행됨 (Python `doctest`의 강화판)
+  * 속성 기반 테스트 `proptest`(Hypothesis 대응), `rstest`/`insta`/`cargo-nextest`
+* **[Chapter 24. CLI 애플리케이션: `argparse`/`click`에서 `clap`으로](./chapters/chapter_24.md)**
+  * `#[derive(Parser)]` — 구조체가 곧 인자 정의, 서브커맨드는 `enum`(망라성 강제)
+  * 자동 `--help`/타입 파싱/검증, `anyhow` 연계 에러 출력, 셸 자동완성
+* **[Chapter 25. 웹 서비스: `FastAPI`에서 `Axum`으로](./chapters/chapter_25.md)**
+  * 핸들러=`async fn`, 익스트랙터(`Json`/`Path`/`State`)=타입 기반 의존성 주입
+  * `tower` 미들웨어, `Arc` 공유 상태, `IntoResponse`로 에러→HTTP 상태코드
+  * [예제] Ch22 집계 서비스를 REST API로 — GIL 없는 단일 프로세스 멀티코어
+* **[Chapter 26. 성능 엔지니어링: 프로파일링·`criterion`·SIMD](./chapters/chapter_26.md)**
+  * `cargo flamegraph`/`perf`/`samply` 프로파일링, `criterion`+`black_box` 방법론 정본화
+  * 자동 벡터화 확인(`--emit asm`)과 `std::simd`, 캐시 친화 레이아웃(SoA vs AoS), `#[inline]`/LTO
+
 ### 부록 (Appendices)
 * **[부록 A. Cargo & 프로젝트 레퍼런스](./appendices/appendix_a_cargo.md)** — 명령어/`Cargo.toml`/프로파일/rustup 빠른 참조
 * **[부록 B. 컴파일러 에러 해독집](./appendices/appendix_b_errors.md)** — 자주 만나는 18종 에러 코드의 원인과 해결
 * **[부록 C. Python → Rust 치트시트](./appendices/appendix_c_cheatsheet.md)** — 관용구 1:1 번역 표
 * **[부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)** — 도메인별 라이브러리 대응표
 * **[부록 E. Python → Rust 마이그레이션 플레이북](./appendices/appendix_e_migration.md)** — 핫스팟 이전 전략과 체크리스트
+* **[부록 F. 용어집 (Glossary)](./appendices/appendix_f_glossary.md)** — 핵심 용어의 단일 진실 원천, 최초 등장 챕터 딥링크 + 양방향 색인
 
 ---
 ## 📝 집필 방식 (Sample)

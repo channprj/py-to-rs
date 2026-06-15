@@ -12,7 +12,7 @@
 
 - **대상**: CS 기초(메모리 구조, 포인터, 동시성, 다형성, 시간복잡도)를 갖춘 시니어 Python 개발자.
 - **전제**: Python 실무 경험, 타입 힌트·데코레이터·`asyncio` 사용 경험. Rust 사전 지식은 필요 없습니다.
-- **분량**: 8부 22장 + 부록 5종, A4 약 600페이지 분량.
+- **분량**: 9부 26장 + 부록 6종, A4 약 750페이지 분량.
 
 처음 시작한다면 **[서문과 시작하기 (frontmatter.md)](./frontmatter.md)** 부터 읽으세요. 집필 의도, 읽는 법, 개발 환경 설정 가이드가 담겨 있습니다.
 
@@ -72,6 +72,13 @@
 - [Chapter 21. C FFI와 Unsafe Rust](./chapters/chapter_21.md)
 - [Chapter 22. PyO3: Python과 Rust의 완벽한 결합](./chapters/chapter_22.md)
 
+### Part 9. 프로덕션으로 가는 길 (From Language to Production)
+
+- [Chapter 23. 테스트와 문서화: `pytest`를 넘어서](./chapters/chapter_23.md)
+- [Chapter 24. CLI 애플리케이션: `argparse`/`click`에서 `clap`으로](./chapters/chapter_24.md)
+- [Chapter 25. 웹 서비스: `FastAPI`에서 `Axum`으로](./chapters/chapter_25.md)
+- [Chapter 26. 성능 엔지니어링: 프로파일링·`criterion`·SIMD](./chapters/chapter_26.md)
+
 ### 부록 (Appendices)
 
 - [부록 A. Cargo &amp; 프로젝트 레퍼런스](./appendices/appendix_a_cargo.md)
@@ -79,6 +86,7 @@
 - [부록 C. Python → Rust 치트시트](./appendices/appendix_c_cheatsheet.md)
 - [부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)
 - [부록 E. Python → Rust 마이그레이션 플레이북](./appendices/appendix_e_migration.md)
+- [부록 F. 용어집 (Glossary)](./appendices/appendix_f_glossary.md)
 
 ---
 
@@ -91,6 +99,7 @@
   - *데이터 모델링/API*: 7 → 8 → 9 → 10 → 13
   - *동시성/비동기*: 16 → 17 → 18
   - *Python에 Rust 끼워넣기*: 21 → 22 → 부록 D → 부록 E
+  - *프로덕션 배포(테스트·CLI·웹·튜닝)*: 23 → 24 → 25 → 26
 - 막히는 컴파일러 에러는 **[부록 B](./appendices/appendix_b_errors.md)**, Python 관용구의 Rust 대응은 **[부록 C](./appendices/appendix_c_cheatsheet.md)** 에서 바로 찾아보세요.
 
 ---
@@ -102,16 +111,17 @@ py-to-rs/
 ├── README.md                 # 이 파일 (책 소개 + 전체 내비게이션)
 ├── BOOK_TOC.md               # 상세 목차와 집필 방향
 ├── frontmatter.md            # 서문 · 읽는 법 · 환경 설정
-├── chapters/                 # 본문 22개 챕터
+├── chapters/                 # 본문 26개 챕터 (Part 1~9)
 │   ├── chapter_01.md
 │   ├── ...
-│   └── chapter_22.md
-└── appendices/               # 부록 5종 (레퍼런스)
+│   └── chapter_26.md
+└── appendices/               # 부록 6종 (레퍼런스)
     ├── appendix_a_cargo.md
     ├── appendix_b_errors.md
     ├── appendix_c_cheatsheet.md
     ├── appendix_d_crates.md
-    └── appendix_e_migration.md
+    ├── appendix_e_migration.md
+    └── appendix_f_glossary.md
 ```
 
 ---
