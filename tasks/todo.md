@@ -72,26 +72,53 @@
 - [x] Wave 1: Ch 1–6 (커밋 264fea6)
 - [x] Wave 2: Ch 7–11 (커밋 f0fc1e7)
 - [x] Wave 3: Ch 12–15 (커밋 409ecca)
-- [ ] **남음** Ch 16 (2차 워크플로에서 부분 편집 +37줄만 되어 revert함 → 재실행 필요)
-- [ ] **남음** Ch 17–18
-- [ ] **남음** Ch 19–22
-- [ ] **남음** frontmatter + 부록 A~E (특히 D 코드 예제, A/E 보강, Python 버전 3.13.6 통일)
+- [x] Ch 16 보강: bounded worker queue + backpressure/graceful shutdown 예제
+- [x] Ch 17–18 보강: lock sharding, timeout/semaphore/cancellation 예제
+- [x] Ch 19–22 보강: trybuild, arena index, FFI ownership, PyO3 wheel/typing/CI 예제
+- [x] frontmatter + 부록 A~E 감사/보강
+  - frontmatter: Part 9·Ch23–26·부록 F 내비게이션 반영, Python 3.13.6 기준 통일
+  - 부록 A: Cargo 품질 게이트/CI 레시피 추가
+  - 부록 D: 실전 크레이트 조합 코드 예제 추가
+  - 부록 E: PyO3 미니 마이그레이션 프로젝트 예제 추가
+  - 부록 B/C: 기존 분량·구조 감사 후 현행 유지
 
 ## Phase C — 신규 추가
 - [x] Part 9. 프로덕션으로 가는 길 (커밋 7777001)
   - [x] Ch 23. 테스트와 문서화 / Ch 24. CLI / Ch 25. 웹(Axum) / Ch 26. 성능
 - [x] 부록 F. 용어집(Glossary) (커밋 0c7bd38)
 - [x] README.md · BOOK_TOC.md 내비게이션 동기화 (커밋 de1067f)
-- [ ] **남음** frontmatter 내비게이션(Part 9·Ch23-26·부록 F 링크) — frontmatter 심화와 함께 처리
+- [x] frontmatter 내비게이션(Part 9·Ch23-26·부록 F 링크) 반영
 
-## Phase D — 검증·마무리 (전부 남음)
-- [ ] 신규/추가 Rust 코드 컴파일 재검증(rustc/cargo 1.90)
-- [ ] 상호참조·링크(특히 신규 챕터→기존 챕터, 부록 F→챕터)·용어 일관성 점검
-- [ ] 분량 재집계(음절/코드/페이지 환산) → README/BOOK_TOC 수치 확정
-- [ ] 최종 commit/push + Review 기록
+## Phase D — 검증·마무리
+- [x] 신규/추가 Rust 코드 컴파일 재검증(rustc/cargo 1.90)
+- [x] 상호참조·링크(특히 신규 챕터→기존 챕터, 부록 F→챕터)·용어 일관성 점검
+- [x] 분량 재집계(음절/코드/페이지 환산) → README/BOOK_TOC 수치 확정
+- [x] 최종 commit/push + Review 기록
 
 ## ⚠️ 중단 사유 및 재개 메모 (2026-06-15)
 - **세션 사용 한도 도달**(reset: 07:00 Asia/Seoul). 2차 심화 워크플로(wkw74b4z5)와 신규콘텐츠(ws0sz23yd)가 진행 중 한도로 다수 에이전트 실패.
 - **현재 커밋된 상태(안전)**: Ch1–15 심화 완료, Part 9(Ch23–26)+부록 F 신규 완료, README/BOOK_TOC 갱신 완료. 모두 origin/main 푸시됨.
 - **주의**: 2차 워크플로가 args 필터를 무시하고 Ch1–11을 재처리해 일부 중복 섹션(ch02 크로스컴파일, ch03 추론 정지, ch08 다중상속)이 생겨 **Ch1–11 미커밋 변경은 전량 revert**함(1차 심화본이 정본). Ch16 부분편집·Ch9 재심화도 revert.
-- **재개 시(한도 회복 후)**: 위 'Phase B 남음' 파일들을 deepen 워크플로(scriptPath: …/deepen-book-wf_e505248d-af1.js, args=[해당 파일들])로 실행 → 웨이브별 커밋/푸시. 이때 **반드시 깨끗한 HEAD 기준**(이미 심화된 Ch1–15는 args에서 제외)으로만 실행해 재중복 방지. 이후 Phase C frontmatter 네비 + Phase D 검증.
+- **해소(2026-06-17)**: 위 Phase B 미완료 범위는 수동 감사 후 직접 보강 완료. 중복 재실행 방지를 위해 Ch1–15는 건드리지 않았고, Ch16–22/frontmatter/부록 A/D/E/부록 F 표기/README/BOOK_TOC/tasks만 갱신.
+
+## Review (2차 작업 후 기록, 2026-06-17)
+
+### 결과 요약
+- **보강 범위**: Ch16–22, frontmatter, 부록 A/D/E, 부록 F 표기, README/BOOK_TOC, chapter_spec, todo.
+- **핵심 추가 예제**:
+  - Ch16: bounded worker queue + backpressure + graceful shutdown
+  - Ch17: lock splitting/sharding + `DashMap` 판단 기준
+  - Ch18: timeout + `Semaphore` + cancellation safety
+  - Ch19: `trybuild` compile-fail 테스트와 매크로 에러 UX
+  - Ch20: `Rc<RefCell>` 대안인 arena/index 기반 그래프
+  - Ch21: FFI `into_raw`/`from_raw`, buffer ABI, panic 경계
+  - Ch22: `abi3` wheel, `.pyi`/`py.typed`, maturin CI
+  - 부록 D/E: 바로 실행 가능한 크레이트 조합·PyO3 미니 마이그레이션 레시피
+- **재집계**: 서문 1 + 본문 26장 + 부록 6종 = 33개 문서, 총 29,027줄.
+  한글 음절 324,393자 + 코드 12,939줄 → A4 추정 약 807페이지(산문 499 + 코드 308).
+- **검증**:
+  - `/tmp/py-to-rs-verify` 임시 크레이트에서 신규 외부 크레이트 예제 `cargo check --bins` 통과(rustc/cargo 1.90).
+  - Ch21 FFI 소유권 예제 `rustc --edition 2021 --crate-type lib` 통과.
+  - 로컬 마크다운 링크 37개 파일 검사 통과.
+  - 코드 펜스 균형 검사 통과.
+  - `git diff --check` 통과.
