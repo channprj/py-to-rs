@@ -613,7 +613,141 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## 18.9 Best Practices & 안티패턴
+## 18.9 운영형 비동기 — timeout, semaphore, cancellation
+
+예제 크롤러는 500개 요청을 한꺼번에 `spawn`했습니다. 데모로는 좋지만 운영 서비스에서는 위험합니다. 외부 API가 느려지면 태스크가 무한히 쌓이고, 한 호스트를 과도하게 때리면 상대 서버가 차단하며, 종료 신호가 와도 진행 중인 작업을 정리하지 못할 수 있습니다. 실무 비동기 코드에는 세 가지 안전장치가 기본입니다.
+
+1. **타임아웃(timeout)**: 외부 I/O는 반드시 끝나는 시간을 정합니다.
+2. **동시성 제한(semaphore)**: 한 번에 날리는 요청 수를 제한합니다.
+3. **취소(cancellation)**: shutdown 신호가 오면 새 작업을 멈추고 기존 작업을 회수합니다.
+
+다음은 세 가지를 모두 담은 완전한 예제입니다. `tokio`와 `reqwest`가 필요합니다.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Semaphore;
+
+#[derive(Debug)]
+enum FetchError {
+    Timeout,
+    Join(tokio::task::JoinError),
+    Http(reqwest::Error),
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchError::Timeout => write!(f, "request timed out"),
+            FetchError::Join(err) => write!(f, "task failed: {err}"),
+            FetchError::Http(err) => write!(f, "http error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for FetchError {}
+
+impl From<tokio::task::JoinError> for FetchError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        FetchError::Join(err)
+    }
+}
+
+impl From<reqwest::Error> for FetchError {
+    fn from(err: reqwest::Error) -> Self {
+        FetchError::Http(err)
+    }
+}
+
+async fn fetch_one(
+    client: reqwest::Client,
+    permits: Arc<Semaphore>,
+    url: String,
+) -> Result<u16, FetchError> {
+    // permit이 drop될 때 자동 반환된다. Python의 async with semaphore와 같은 역할.
+    let _permit = permits.acquire_owned().await.expect("semaphore closed");
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.get(url).send(),
+    )
+    .await
+    .map_err(|_| FetchError::Timeout)??;
+
+    Ok(response.status().as_u16())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), FetchError> {
+    let client = reqwest::Client::new();
+    let permits = Arc::new(Semaphore::new(64)); // 최대 64개 동시 요청
+    let urls = vec!["https://example.com".to_string(); 1_000];
+
+    let mut handles = Vec::with_capacity(urls.len());
+    for url in urls {
+        let client = client.clone();
+        let permits = Arc::clone(&permits);
+        handles.push(tokio::spawn(fetch_one(client, permits, url)));
+    }
+
+    let mut ok = 0usize;
+    for handle in handles {
+        match handle.await?? {
+            200..=299 => ok += 1,
+            status => eprintln!("non-success status: {status}"),
+        }
+    }
+
+    println!("successful responses: {ok}");
+    Ok(())
+}
+```
+
+`Semaphore::new(64)`가 핵심입니다. URL이 1,000개여도 동시에 네트워크에 나가는 요청은 64개를 넘지 않습니다. 나머지 태스크는 permit을 기다리며 런타임 안에서 잠들어 있고, OS 스레드를 막지 않습니다. `timeout`은 응답이 2초 안에 오지 않으면 future를 취소합니다. 취소는 예외를 던지는 파이썬과 다르게 **future를 drop하는 것**입니다. drop되면서 소유한 소켓, 버퍼, permit이 차례로 정리됩니다.
+
+취소 신호까지 포함하면 `select!`가 들어갑니다.
+
+```rust
+use tokio::signal;
+use tokio::time::{sleep, Duration};
+
+async fn worker_loop() {
+    loop {
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                eprintln!("shutdown requested");
+                break;
+            }
+            _ = sleep(Duration::from_millis(250)) => {
+                // 큐에서 한 번 가져와 처리한다고 가정
+                println!("tick");
+            }
+        }
+    }
+}
+```
+
+`select!`는 여러 future를 동시에 폴링하다가 먼저 준비된 가지를 실행하고 나머지를 drop합니다. 이것이 Rust 비동기의 취소 모델입니다. 파이썬 `asyncio.CancelledError`는 코루틴 안으로 예외가 주입되지만, Rust는 소유권 기반으로 future를 떨어뜨려 자원을 해제합니다. 따라서 **drop이 곧 cleanup 경로**입니다. 파일 핸들, permit, DB 커넥션 가드처럼 RAII 타입으로 자원을 감싸두면 취소 시에도 누수가 없습니다.
+
+> **💡 Under the Hood: 취소 안전성(cancellation safety)은 drop 불변식이다**
+>
+> `.await` 지점은 future가 중단될 수 있는 지점이자, 취소되면 drop될 수 있는 지점입니다. 그래서 `.await`을 넘겨 살아 있는 값은 "중간에 drop되어도 불변식이 깨지지 않는가"를 만족해야 합니다. `SemaphorePermit`은 drop되면 permit을 반환하므로 취소 안전합니다. 반대로 "파일에 헤더를 쓰고 `.await`, 나중에 바디를 쓴다" 같은 코드는 취소되면 깨진 파일을 남길 수 있습니다. 해결책은 임시 파일에 완성한 뒤 atomic rename을 하거나, 트랜잭션처럼 commit 지점을 분리하는 것입니다. 파이썬에서도 같은 문제가 있지만, Rust는 RAII 덕분에 자원 반납만큼은 자동으로 처리됩니다.
+
+운영 체크리스트로 정리하면 다음과 같습니다.
+
+| 위험 | Rust 도구 | 파이썬 대응 | 핵심 규칙 |
+|---|---|---|---|
+| 무한 대기 | `tokio::time::timeout` | `asyncio.wait_for` | 외부 I/O에는 기본값으로 시간 제한 |
+| 동시성 폭주 | `Semaphore` | `asyncio.Semaphore` | 상대 시스템별 permit 수를 따로 둠 |
+| CPU 블로킹 | `spawn_blocking` / `rayon` | `run_in_executor` | 런타임 워커를 막지 않음 |
+| 종료 신호 | `select!` + `ctrl_c` | signal handler | 새 작업 중단, 기존 작업 회수 |
+| 배경 태스크 누수 | `JoinHandle` 보관/abort | task tracking | spawn한 것은 반드시 소유자가 회수 |
+
+이 다섯 가지가 없는 비동기 코드는 "돌아가는 데모"이지 "운영 서비스"가 아닙니다.
+
+---
+
+## 18.10 Best Practices & 안티패턴
 
 실무 체크리스트입니다.
 
@@ -635,7 +769,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## 18.10 흔한 함정 — 파이썬 습관이 부르는 사고
+## 18.11 흔한 함정 — 파이썬 습관이 부르는 사고
 
 파이썬 비동기 습관이 Rust에서 어떻게 어긋나는지, 그리고 어떻게 고치는지 정리합니다.
 

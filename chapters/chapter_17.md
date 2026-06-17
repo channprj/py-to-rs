@@ -669,7 +669,110 @@ fn main() {
 
 ---
 
-## 17.9 Best Practices & 안티패턴
+## 17.9 락 경합 줄이기 — lock splitting과 sharding
+
+17.8의 `SharedCache`는 정확하고 단순합니다. 하지만 모든 쓰기가 하나의 `RwLock<HashMap<...>>`을 통과하므로, 쓰기 비율이 높아지면 락 경합(contention)이 병목이 됩니다. 파이썬의 GIL을 벗어나려고 Rust로 왔는데 거대한 단일 락 하나로 다시 GIL을 만든 셈이 될 수 있습니다.
+
+첫 번째 튜닝은 **lock splitting**입니다. 서로 독립적인 데이터라면 하나의 `Mutex<AppState>`에 모두 넣지 말고, 필드별로 락을 나눕니다.
+
+```rust
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+struct AppState {
+    users: Mutex<HashMap<u64, String>>,
+    sessions: Mutex<HashMap<String, u64>>,
+    metrics: Mutex<HashMap<String, u64>>,
+}
+```
+
+이렇게 하면 `users`를 갱신하는 스레드와 `metrics`를 갱신하는 스레드가 서로 기다리지 않습니다. 더 나아가 같은 종류의 데이터라도 키 공간을 여러 조각으로 나누는 **sharding**을 적용할 수 있습니다.
+
+```rust
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+struct ShardedCounters {
+    shards: Vec<Mutex<HashMap<String, u64>>>,
+}
+
+impl ShardedCounters {
+    fn new(shards: usize) -> Self {
+        assert!(shards > 0);
+        let shards = (0..shards)
+            .map(|_| Mutex::new(HashMap::new()))
+            .collect();
+        ShardedCounters { shards }
+    }
+
+    fn shard_for(&self, key: &str) -> usize {
+        let mut hasher = DefaultHasher::new();
+        key.hash(&mut hasher);
+        (hasher.finish() as usize) % self.shards.len()
+    }
+
+    fn incr(&self, key: &str) {
+        let idx = self.shard_for(key);
+        let mut shard = self.shards[idx].lock().unwrap();
+        *shard.entry(key.to_string()).or_insert(0) += 1;
+    }
+
+    fn get(&self, key: &str) -> u64 {
+        let idx = self.shard_for(key);
+        let shard = self.shards[idx].lock().unwrap();
+        shard.get(key).copied().unwrap_or(0)
+    }
+}
+
+fn main() {
+    let counters = Arc::new(ShardedCounters::new(16));
+    let mut handles = Vec::new();
+
+    for worker in 0..8 {
+        let counters = Arc::clone(&counters);
+        handles.push(thread::spawn(move || {
+            for i in 0..50_000 {
+                let key = format!("tenant:{}:metric:{}", worker % 4, i % 128);
+                counters.incr(&key);
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    println!(
+        "tenant:0:metric:0 = {}",
+        counters.get("tenant:0:metric:0")
+    );
+}
+```
+
+단일 `Mutex<HashMap>`과 비교하면, 이 구조는 서로 다른 shard에 떨어진 키들이 서로 독립적으로 잠깁니다. 16개 shard라면 최악의 경우는 여전히 한 shard에 몰리지만, 균등한 키 분포에서는 락 경합이 대략 1/16로 줄어듭니다. 이것이 `DashMap` 크레이트의 핵심 아이디어입니다. 직접 구현할 수도 있지만, 실무에서는 `dashmap::DashMap`을 먼저 고려하세요. 내부적으로 shard를 나누고 API를 `HashMap`처럼 제공해, 위 보일러플레이트를 줄여 줍니다.
+
+> **💡 Under the Hood: sharding은 락의 임계 구역을 공간적으로 나눈다**
+>
+> `Mutex<T>` 하나는 "T 전체가 하나의 임계 구역"이라는 뜻입니다. `Vec<Mutex<HashMap<...>>>`는 키 공간을 N개의 임계 구역으로 나눕니다. 이때 각 shard의 `Mutex`는 별도의 캐시 라인과 OS 대기 큐를 가지므로, 다른 shard를 잡는 스레드끼리는 커널 수준에서도 서로 깨우거나 잠재우지 않습니다. 단, shard 수를 무작정 늘리면 해시 계산·메모리·순회 비용이 커지고, 전체 스냅샷을 만들 때 모든 락을 순서대로 잡아야 하므로 데드락 규칙도 다시 필요합니다. 프로파일링 없이 "많을수록 좋다"는 결론으로 가면 안 됩니다.
+
+락 경합을 줄이는 선택지는 다음 순서로 검토하면 됩니다.
+
+| 증상 | 첫 번째 처방 | 그래도 부족하면 |
+|---|---|---|
+| 읽기가 대부분, 쓰기 드묾 | `RwLock<T>` | 캐시 invalidation 전략 재검토 |
+| 서로 독립적인 필드 경합 | lock splitting | 상태 구조 자체 재설계 |
+| 같은 맵의 여러 키 경합 | sharding / `DashMap` | actor/채널 기반 단일 소유자 모델 |
+| 단일 카운터 경합 | `AtomicU64` | per-thread counter 후 합산 |
+| 락 안 작업이 긺 | 임계 구역 축소 | 작업 큐로 소유권 이동 |
+
+중요한 기준은 "락이 느리다"가 아니라 **어떤 불변식을 함께 보호해야 하는가**입니다. 서로 독립적인 값을 한 락으로 묶으면 느리고, 함께 갱신돼야 하는 값을 여러 락으로 찢으면 빠르지만 틀립니다. 성능보다 먼저 불변식을 그리세요. Rust의 타입은 데이터 레이스를 막아주지만, 비즈니스 불변식까지 자동으로 지켜주지는 않습니다.
+
+---
+
+## 17.10 Best Practices & 안티패턴
 
 먼저 "무엇을 언제 쓰는가"를 한 장의 표로 정리합니다. 이 결정 매트릭스를 손에 익히면 동기화 도구 선택의 90%가 끝납니다.
 
@@ -700,7 +803,7 @@ fn main() {
 
 ---
 
-## 17.10 흔한 함정 (Python 개발자가 자주 하는 실수)
+## 17.11 흔한 함정 (Python 개발자가 자주 하는 실수)
 
 **함정 1: 락을 잡은 채 `.await` 하기 (다음 장의 예고편).**
 18장에서 비동기를 다룰 때 가장 많이 터지는 실수입니다. `std::sync::Mutex`의 가드를 들고 `.await`를 호출하면, 그 await 지점에서 태스크가 다른 스레드로 옮겨갈 수 있는데 가드는 스레드 간 이동이 안 되거나(`!Send`), 락을 든 채로 다른 태스크에 양보해 데드락을 유발합니다. 비동기 코드에서는 `tokio::sync::Mutex`를 쓰거나, await 이전에 락을 풀어야 합니다.

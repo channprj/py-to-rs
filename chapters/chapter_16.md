@@ -586,7 +586,128 @@ let par = (2..LIMIT).into_par_iter().filter(|&n| is_prime(n)).count(); // rayon
 
 ---
 
-## 16.9 Best Practices & 안티패턴
+## 16.9 운영형 패턴 — bounded worker queue와 graceful shutdown
+
+지금까지의 예제는 개념을 보여주기 위해 작게 유지했습니다. 실무에서는 조금 더 완성된 형태가 필요합니다. 요청이 끝없이 들어오는 서비스에서 "요청마다 스레드 하나"를 띄우면 곧 스케줄러가 병목이 됩니다. 반대로 무제한 채널에 작업을 밀어 넣으면 생산자가 소비자를 압도해 메모리가 불어납니다. 운영 코드의 기본형은 **고정된 워커 수 + bounded queue + 명시적 종료**입니다.
+
+파이썬에서 흔한 형태는 `ThreadPoolExecutor(max_workers=N)`입니다.
+
+```python
+from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
+
+def process(job: int) -> int:
+    return job * job
+
+with ThreadPoolExecutor(max_workers=4) as pool:
+    for value in pool.map(process, range(10_000)):
+        pass
+```
+
+CPU 바운드라면 이 코드는 GIL 때문에 병렬화되지 않습니다. I/O 바운드라면 괜찮지만, 큐 크기와 백프레셔(backpressure)를 세밀하게 제어하기 어렵습니다. Rust에서는 `crossbeam-channel`의 bounded 채널을 쓰면 "큐가 가득 차면 생산자가 기다린다"는 정책을 타입과 코드로 드러낼 수 있습니다.
+
+```toml
+[dependencies]
+crossbeam-channel = "0.5"
+```
+
+```rust
+use crossbeam_channel::{bounded, Receiver, Sender};
+use std::thread;
+use std::time::Duration;
+
+#[derive(Debug)]
+struct Job {
+    id: usize,
+    payload: u64,
+}
+
+#[derive(Debug)]
+struct Done {
+    worker: usize,
+    job_id: usize,
+    result: u64,
+}
+
+fn expensive_compute(n: u64) -> u64 {
+    // CPU 작업 흉내. 실제 코드라면 파싱, 압축, 해시, 이미지 처리 등이 온다.
+    (0..n).map(|x| x.wrapping_mul(31)).sum()
+}
+
+fn worker(id: usize, rx: Receiver<Job>, done: Sender<Done>) {
+    // tx가 모두 drop되면 rx 반복자가 자연스럽게 종료된다.
+    for job in rx {
+        let result = expensive_compute(job.payload);
+        done.send(Done {
+            worker: id,
+            job_id: job.id,
+            result,
+        })
+        .expect("done receiver should be alive");
+    }
+}
+
+fn main() {
+    let workers = 4;
+    let jobs = 32;
+
+    // 큐 용량을 8로 제한한다. 소비자가 느리면 send()가 막혀 생산자가 속도를 낮춘다.
+    let (tx, rx) = bounded::<Job>(8);
+    let (done_tx, done_rx) = bounded::<Done>(jobs);
+
+    let mut handles = Vec::new();
+    for id in 0..workers {
+        let rx = rx.clone(); // crossbeam은 receiver 복제를 지원한다.
+        let done_tx = done_tx.clone();
+        handles.push(thread::spawn(move || worker(id, rx, done_tx)));
+    }
+    drop(rx);
+    drop(done_tx);
+
+    for id in 0..jobs {
+        tx.send(Job {
+            id,
+            payload: 50_000 + (id as u64 * 10),
+        })
+        .expect("workers should be alive");
+    }
+    drop(tx); // 종료 신호: 더 이상 job이 없음을 모든 worker에게 알린다.
+
+    let mut checksum = 0u64;
+    for done in done_rx {
+        println!("worker {} finished job {}", done.worker, done.job_id);
+        checksum ^= done.result;
+    }
+
+    for h in handles {
+        h.join().expect("worker panicked");
+    }
+
+    // 최적화가 계산을 제거하지 못하도록 결과를 사용한다.
+    thread::sleep(Duration::from_millis(1));
+    println!("checksum = {checksum}");
+}
+```
+
+이 예제는 작은 형태지만 운영 코드의 핵심 불변식을 모두 담고 있습니다.
+
+| 설계 요소 | 코드 위치 | 운영상의 의미 |
+|---|---|---|
+| 고정 워커 수 | `for id in 0..workers` | 코어 수 이상으로 스레드가 폭증하지 않음 |
+| bounded queue | `bounded::<Job>(8)` | 소비자가 느리면 생산자가 자연스럽게 backpressure를 받음 |
+| 명시적 종료 | `drop(tx)` | 채널 닫힘이 shutdown 신호가 됨 |
+| 결과 채널 | `done_tx`/`done_rx` | 워커가 공유 상태를 직접 수정하지 않고 결과만 보고 |
+| 패닉 회수 | `join().expect(...)` | 워커 실패가 조용히 묻히지 않음 |
+
+> **💡 Under the Hood: bounded queue는 메모리 사용량의 상한이다**
+>
+> `bounded::<Job>(8)`은 단지 "조금 느리게 보내라"는 힌트가 아닙니다. 큐 안에 동시에 존재할 수 있는 `Job`의 수를 8개로 제한하므로, 입력 폭주가 와도 큐 메모리는 `8 * size_of::<Job>()` 근처에서 멈춥니다. 파이썬의 `queue.Queue(maxsize=8)`도 같은 개념이지만, Rust에서는 `Job`이 소유권을 가진 값으로 이동하므로 워커가 처리하는 동안 생산자가 같은 데이터를 수정할 수 없습니다. 백프레셔와 소유권 이동이 결합되어 "메모리 상한"과 "데이터 레이스 없음"을 동시에 얻습니다.
+
+실무에서는 이 패턴을 그대로 두고 세 가지만 바꿉니다. 첫째, CPU 바운드 map/reduce라면 직접 워커 풀을 짜기보다 `rayon`을 먼저 씁니다. 둘째, I/O 바운드라면 Chapter 18의 `tokio` 태스크와 `Semaphore`가 더 적합합니다. 셋째, 워커가 공유 캐시를 읽고 써야 한다면 Chapter 17의 `Arc<RwLock<T>>`나 `DashMap`으로 상태를 감쌉니다. 즉 이 절은 "스레드를 직접 다뤄야 할 때의 최소 안전 골격"입니다.
+
+---
+
+## 16.10 Best Practices & 안티패턴
 
 **이렇게 하라 (Do)**
 
@@ -606,7 +727,7 @@ let par = (2..LIMIT).into_par_iter().filter(|&n| is_prime(n)).count(); // rayon
 
 ---
 
-## 16.10 흔한 함정 (파이썬 개발자가 자주 하는 실수)
+## 16.11 흔한 함정 (파이썬 개발자가 자주 하는 실수)
 
 ### 함정 1: `move`를 잊는다
 
@@ -632,7 +753,7 @@ let par = (2..LIMIT).into_par_iter().filter(|&n| is_prime(n)).count(); // rayon
 
 Rust의 동시성은 파이썬과 근본적으로 다른 약속 위에 서 있습니다. 파이썬은 "한 번에 하나만 실행하게 해서(GIL) refcount를 지키고, 진짜 병렬이 필요하면 프로세스를 복제하라"고 말합니다. Rust는 "모든 코어를 진짜로 동시에 쓰되, 스레드 간에 오가는 데이터의 안전성을 `Send`/`Sync`로 컴파일 타임에 증명하라"고 말합니다. 그 결과가 두려움 없는 동시성 — 데이터 레이스가 런타임의 운이 아니라 빌드의 통과 여부가 되는 세계입니다.
 
-이번 챕터에서 우리는 `move`로 소유권을 넘기고, 채널로 통신하고, `scope`로 안전하게 빌리고, `rayon`으로 데이터를 병렬로 흘려보냈습니다. 하지만 한 가지를 의도적으로 미뤘습니다 — 여러 스레드가 **동시에 하나의 값을 읽고 쓰는** 진짜 공유 상태입니다. 글로벌 캐시, 조회수 카운터, 누적 집계기. 16.10절 함정 3에서 경고했듯, 이것은 위험천만하지만 때로 불가피합니다. 그리고 `Rc`를 스레드로 보내려다 만난 `error[E0277]: Rc cannot be sent`가 가리킨 해답이 바로 그 다음 장에 있습니다.
+이번 챕터에서 우리는 `move`로 소유권을 넘기고, 채널로 통신하고, `scope`로 안전하게 빌리고, `rayon`으로 데이터를 병렬로 흘려보냈습니다. 하지만 한 가지를 의도적으로 미뤘습니다 — 여러 스레드가 **동시에 하나의 값을 읽고 쓰는** 진짜 공유 상태입니다. 글로벌 캐시, 조회수 카운터, 누적 집계기. 16.11절 함정 3에서 경고했듯, 이것은 위험천만하지만 때로 불가피합니다. 그리고 `Rc`를 스레드로 보내려다 만난 `error[E0277]: Rc cannot be sent`가 가리킨 해답이 바로 그 다음 장에 있습니다.
 
 **Chapter 17: 상태 공유와 동기화**에서는 원자적 참조 카운트 `Arc<T>`와, 데이터를 락으로 감싸 "락 없이는 접근조차 못 하게" 강제하는 `Mutex<T>`·`RwLock<T>`를 파헤칩니다. 파이썬의 `threading.Lock`이 무시할 수 있는 신호등이었다면, Rust의 `Mutex<T>`는 데이터를 물리적으로 가둔 금고입니다. 그리고 그 금고를 잘못 다뤘을 때 발생하는 데드락마저, Rust의 타입 시스템과 RAII가 어떻게 도와주는지 보게 될 것입니다.
 
