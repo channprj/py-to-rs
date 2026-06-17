@@ -502,7 +502,147 @@ fn main() {
 
 ---
 
-## 21.8 Best Practices & 안티패턴
+## 21.8 소유권을 ABI로 넘기기 — `into_raw`/`from_raw`와 panic 경계
+
+FFI에서 가장 흔한 사고는 "포인터를 넘겼다"가 아니라 **소유권을 누가 갖는지 말하지 않았다**에서 시작합니다. C 함수가 Rust에서 만든 문자열을 언제 해제해야 하는가? Rust가 C에 넘긴 버퍼를 C가 수정해도 되는가? Rust 함수가 패닉하면 C 호출자는 무엇을 보게 되는가? 이 질문들에 답하지 않은 ABI는 언젠가 누수, 이중 해제, UB로 터집니다.
+
+### 문자열 소유권 이전
+
+Rust 문자열을 C에 넘겨 C가 나중에 해제하게 하려면 `CString::into_raw`로 소유권을 포인터로 바꿔 넘기고, 반드시 짝이 되는 `from_raw` 해제 함수를 함께 제공합니다.
+
+```rust
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
+
+#[no_mangle]
+pub extern "C" fn greeting_new(name: *const c_char) -> *mut c_char {
+    let name = if name.is_null() {
+        "anonymous".to_string()
+    } else {
+        // SAFETY: 호출자는 name이 널 종료 C 문자열임을 보장해야 한다.
+        let c_name = unsafe { CStr::from_ptr(name) };
+        c_name.to_string_lossy().into_owned()
+    };
+
+    CString::new(format!("hello, {name}"))
+        .expect("generated string contains no NUL")
+        .into_raw() // 이제 Rust가 자동으로 drop하지 않는다. 호출자가 free해야 한다.
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn greeting_free(ptr: *mut c_char) {
+    if ptr.is_null() {
+        return;
+    }
+    // SAFETY: ptr은 greeting_new가 반환했고 아직 한 번도 free되지 않았어야 한다.
+    drop(CString::from_raw(ptr));
+}
+```
+
+C 쪽 계약은 명확합니다. `greeting_new`가 돌려준 포인터는 `greeting_free`로 정확히 한 번 해제해야 합니다. `free(3)`로 해제하면 안 됩니다. Rust 전역 할당자와 C 런타임 할당자가 다를 수 있고, 설령 같더라도 `CString`의 내부 불변식을 C가 알지 못하기 때문입니다.
+
+### 버퍼를 통째로 넘기기
+
+문자열보다 더 흔한 것은 바이트 버퍼입니다. 이때는 포인터만으로 부족합니다. 길이와 용량(capacity)을 함께 넘겨야 Rust가 나중에 `Vec::from_raw_parts`로 정확히 복원해 해제할 수 있습니다.
+
+```rust
+use std::mem;
+use std::slice;
+
+#[repr(C)]
+pub struct Buffer {
+    ptr: *mut u8,
+    len: usize,
+    cap: usize,
+}
+
+#[no_mangle]
+pub extern "C" fn buffer_new() -> Buffer {
+    let mut data = b"rust-owned bytes".to_vec();
+    let buffer = Buffer {
+        ptr: data.as_mut_ptr(),
+        len: data.len(),
+        cap: data.capacity(),
+    };
+    mem::forget(data); // Vec의 Drop을 멈추고 소유권을 ABI 밖으로 넘긴다.
+    buffer
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn buffer_free(buffer: Buffer) {
+    if buffer.ptr.is_null() {
+        return;
+    }
+    // SAFETY: ptr/len/cap은 buffer_new에서 나온 원본 그대로여야 한다.
+    drop(Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.cap));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn buffer_sum(buffer: Buffer) -> u64 {
+    if buffer.ptr.is_null() {
+        return 0;
+    }
+    // 읽기만 할 때는 소유권을 되찾지 않고 슬라이스로 빌린다.
+    let bytes = slice::from_raw_parts(buffer.ptr, buffer.len);
+    bytes.iter().map(|&b| b as u64).sum()
+}
+```
+
+`Buffer`는 반드시 `#[repr(C)]`여야 합니다. C가 보는 필드 순서와 Rust가 보는 필드 순서가 같아야 하기 때문입니다. 또한 C는 `len`과 `cap`을 임의로 바꾸면 안 됩니다. `cap`이 틀리면 `from_raw_parts`가 할당자에 잘못된 크기를 돌려줘 UB가 됩니다. 이런 이유로 실무에서는 `Buffer`를 opaque pointer로 감싸고 C가 내부 필드를 만지지 못하게 하거나, C 헤더에 "필드 수정 금지"를 강하게 문서화합니다.
+
+> **💡 Under the Hood: `Vec::from_raw_parts`는 할당자에게 영수증을 돌려주는 행위다**
+>
+> `Vec<T>`는 `(ptr, len, cap)` 세 값을 들고 있습니다. `ptr`은 할당된 메모리 시작 주소, `len`은 초기화된 원소 수, `cap`은 할당자가 실제로 예약한 원소 수입니다. 해제할 때 할당자는 `ptr`만으로 충분하지 않습니다. 어느 크기의 블록을 돌려받는지 알아야 하므로 `cap`이 필요합니다. 그래서 `ptr`과 `len`만 ABI로 넘기는 것은 읽기에는 충분해도 **소유권 회수에는 불충분**합니다.
+
+### FFI 경계에서 panic을 넘기지 말라
+
+Rust 패닉이 `extern "C"` 경계를 넘어 C로 전파되는 것은 정의되지 않은 동작이거나(ABI에 따라) 즉시 abort로 이어질 수 있습니다. FFI로 노출하는 함수는 `Result`를 C식 에러 코드로 바꾸고, 혹시 모를 패닉은 `catch_unwind`로 막아야 합니다.
+
+```rust
+use std::os::raw::c_int;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+#[no_mangle]
+pub extern "C" fn divide(a: c_int, b: c_int, out: *mut c_int) -> c_int {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if out.is_null() {
+            return -2; // null output pointer
+        }
+        if b == 0 {
+            return -1; // divide by zero
+        }
+
+        // SAFETY: null 체크를 마쳤고, 호출자는 out이 쓰기 가능한 포인터임을 보장해야 한다.
+        unsafe {
+            *out = a / b;
+        }
+        0
+    }));
+
+    match result {
+        Ok(code) => code,
+        Err(_) => -255, // Rust panic crossed internal boundary
+    }
+}
+```
+
+이 함수의 ABI는 C 친화적입니다. 반환값 `0`은 성공, 음수는 에러 코드입니다. 실제 결과는 `out` 포인터에 씁니다. Rust 내부에서는 `Result`와 `?`를 쓰더라도, FFI 경계에서는 C가 이해하는 규약으로 번역해야 합니다. PyO3가 다음 장에서 해주는 일이 바로 이 번역입니다. Rust의 `Result<T, E>`를 파이썬 예외로, Rust 패닉을 `PanicException`으로, GIL 계약을 `Python<'py>` 토큰으로 바꿔 주는 것입니다.
+
+소유권 계약은 문서가 아니라 API 모양으로 드러내는 것이 가장 좋습니다.
+
+| 상황 | 권장 ABI | 해제 책임 |
+|---|---|---|
+| C가 잠깐 읽기만 함 | `(*const T, len)` | Rust가 계속 소유 |
+| Rust가 새 문자열 반환 | `*mut c_char` + `string_free` | C가 `string_free` 호출 |
+| Rust가 새 버퍼 반환 | `Buffer { ptr, len, cap }` + `buffer_free` | C가 원본 그대로 반환 |
+| C가 버퍼를 채워 줌 | `(*mut T, cap, *mut len_out)` | Rust가 버퍼 소유, C는 쓰기만 |
+| C 라이브러리가 할당 | C의 `free_*` 함수 사용 | C 라이브러리 규약 따름 |
+
+`unsafe` 코드 리뷰에서는 이 표를 들고 "소유권이 어디서 어디로 이동하는가, 누가 언제 해제하는가, 패닉과 에러는 어떤 값으로 표현되는가"를 한 줄씩 확인해야 합니다.
+
+---
+
+## 21.9 Best Practices & 안티패턴
 
 `unsafe`와 FFI는 Rust에서 가장 날카로운 도구입니다. 실무 체크리스트로 정리합니다.
 
@@ -521,7 +661,7 @@ fn main() {
 - **귀찮다고 함수 전체를 `unsafe`로 만들지 말라.** 위험 영역이 넓어져 감사가 불가능해집니다.
 - **`unsafe`로 빌림 검사기를 "이기려" 하지 말라.** "컴파일러가 자꾸 막으니 `unsafe`로 우회한다"는 거의 항상 설계 오류의 신호입니다. `unsafe`는 검사기를 끄지도 않습니다(21.2).
 - **`transmute`를 함부로 쓰지 말라.** 타입 간 비트 재해석은 FFI에서도 거의 필요 없고, 레이아웃 가정이 틀리면 UB입니다. 대부분 `as` 캐스트나 `from_raw_parts`로 충분합니다.
-- **`static mut`을 새 코드에 쓰지 말라.** 데이터 레이스를 컴파일러가 막아주지 못합니다. `OnceLock`, `LazyLock`, 혹은 `AtomicUsize` 같은 안전한 대안을 쓰십시오(21.9 참고).
+- **`static mut`을 새 코드에 쓰지 말라.** 데이터 레이스를 컴파일러가 막아주지 못합니다. `OnceLock`, `LazyLock`, 혹은 `AtomicUsize` 같은 안전한 대안을 쓰십시오(21.10 참고).
 - **C에서 받은 포인터를 널 체크 없이 역참조하지 말라.**
 
 > **Under the Hood: 미정의 동작(UB)은 "그냥 크래시"가 아니다**
@@ -530,7 +670,7 @@ fn main() {
 
 ---
 
-## 21.9 흔한 함정 (Python 개발자가 자주 하는 실수)
+## 21.10 흔한 함정 (Python 개발자가 자주 하는 실수)
 
 **함정 1: `unsafe`가 검사기를 끈다고 착각한다.** 가장 흔한 오해입니다. "빌림 검사기가 막으니 `unsafe`로 감싸면 되겠지"라고 생각하지만, `unsafe` 안에서도 소유권과 대여 규칙은 그대로 작동합니다(21.2). `unsafe`는 21.2에 나열한 다섯 능력만 잠금 해제할 뿐입니다. 빌림 에러를 `unsafe`로 우회하려는 시도는 컴파일조차 안 됩니다. 해결책은 `unsafe`가 아니라 설계를 고치는 것입니다.
 

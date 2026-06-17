@@ -706,7 +706,126 @@ y = 43
 
 ---
 
-## 19.9 Best Practices & 안티패턴
+## 19.9 매크로 검증 — `trybuild`와 compile-fail 테스트
+
+매크로는 테스트 방식도 일반 함수와 다릅니다. 함수는 "이 입력을 넣으면 이 값이 나온다"를 테스트하면 됩니다. 매크로는 거기에 더해 **잘못 썼을 때 좋은 컴파일 에러가 나는가**를 테스트해야 합니다. 파이썬 데코레이터는 런타임에 실패하지만, Rust 매크로의 사용자 경험은 컴파일 에러 메시지 품질에 달려 있습니다.
+
+절차적 매크로 크레이트에서 표준처럼 쓰이는 도구가 `trybuild`입니다. `tests/ui/*.rs`에 "컴파일되어야 하는 예제"와 "컴파일에 실패해야 하는 예제"를 두고, stderr 스냅샷까지 검증합니다.
+
+```toml
+[dev-dependencies]
+trybuild = "1"
+```
+
+```rust
+// tests/trybuild.rs
+#[test]
+fn ui_tests() {
+    let t = trybuild::TestCases::new();
+    t.pass("tests/ui/pass_timer.rs");
+    t.compile_fail("tests/ui/fail_timer_on_struct.rs");
+}
+```
+
+성공해야 하는 예제는 실제 사용자가 README에서 복사할 법한 최소 코드입니다.
+
+```rust
+// tests/ui/pass_timer.rs
+use my_macros::timer;
+
+#[timer]
+fn work() -> u32 {
+    42
+}
+
+fn main() {
+    assert_eq!(work(), 42);
+}
+```
+
+실패해야 하는 예제는 매크로의 계약을 일부러 어깁니다.
+
+```rust
+// tests/ui/fail_timer_on_struct.rs
+use my_macros::timer;
+
+#[timer]
+struct NotAFunction;
+
+fn main() {}
+```
+
+좋은 속성 매크로라면 이때 `syn`의 내부 파싱 에러를 그대로 흘리지 않고, 호출자에게 명확한 메시지를 줘야 합니다.
+
+```text
+error: #[timer] can only be applied to functions
+ --> tests/ui/fail_timer_on_struct.rs:3:1
+  |
+3 | #[timer]
+  | ^^^^^^^^
+```
+
+이런 메시지를 만들려면 절차적 매크로 내부에서 `syn::Error`를 `compile_error!` 토큰으로 바꿔 반환합니다.
+
+```rust
+use proc_macro::TokenStream;
+use quote::quote;
+use syn::{parse_macro_input, Item, ItemFn};
+
+#[proc_macro_attribute]
+pub fn timer(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(item as Item);
+
+    let function = match parsed {
+        Item::Fn(function) => function,
+        other => {
+            return syn::Error::new_spanned(
+                other,
+                "#[timer] can only be applied to functions",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    expand_timer(function).into()
+}
+
+fn expand_timer(function: ItemFn) -> proc_macro2::TokenStream {
+    let name = &function.sig.ident;
+    let vis = &function.vis;
+    let sig = &function.sig;
+    let block = &function.block;
+
+    quote! {
+        #vis #sig {
+            let __start = ::std::time::Instant::now();
+            let __result = (|| #block)();
+            eprintln!("{} took {:?}", stringify!(#name), __start.elapsed());
+            __result
+        }
+    }
+}
+```
+
+여기서 `new_spanned(other, "...")`가 중요합니다. 에러의 위치(span)를 사용자가 붙인 잘못된 아이템 전체에 걸어 주므로, 컴파일러가 정확한 위치를 밑줄로 표시합니다. 매크로 작성자는 단지 코드를 생성하는 사람이 아니라, **컴파일러 에러 UX를 설계하는 사람**입니다.
+
+> **💡 Under the Hood: `compile_error!`는 실패를 토큰으로 표현한다**
+>
+> 절차적 매크로는 성공하면 Rust 코드를 토큰으로 반환합니다. 실패도 같은 방식입니다. `syn::Error::to_compile_error()`는 내부적으로 `compile_error!("...")` 매크로 호출을 만들어 반환합니다. 그러면 rustc는 매크로 확장 결과를 다시 파싱하다가 `compile_error!`를 만나 의도된 컴파일 에러를 출력합니다. 즉 "매크로가 실패했다"는 예외나 패닉이 아니라, **실패를 나타내는 Rust 코드 조각**입니다. 이 구조 덕분에 실패 위치(span)와 메시지를 사용자가 읽기 좋게 제어할 수 있습니다.
+
+CI에서는 다음 순서를 권합니다.
+
+```bash
+$ cargo test
+$ cargo expand --test trybuild >/tmp/expanded.rs   # 필요할 때만 수동 확인
+```
+
+`trybuild`의 첫 실행은 stderr 스냅샷을 생성하라고 안내합니다. 메시지를 검토한 뒤 승인하면, 이후에는 매크로 에러 메시지가 바뀌는 것도 회귀로 잡힙니다. 라이브러리 사용자에게는 "컴파일 실패도 API"입니다. 깨끗한 매크로 라이브러리는 성공 경로만큼 실패 경로를 테스트합니다.
+
+---
+
+## 19.10 Best Practices & 안티패턴
 
 ### 이렇게 하라
 
@@ -726,7 +845,7 @@ y = 43
 
 ---
 
-## 19.10 흔한 함정 (파이썬 개발자가 자주 하는 실수)
+## 19.11 흔한 함정 (파이썬 개발자가 자주 하는 실수)
 
 **함정 1 — 매크로를 함수처럼 생각한다.**
 

@@ -621,7 +621,115 @@ b = fast_agg.square_all(a)   # 입력은 복사 안 함, 계산은 멀티코어
 
 ---
 
-## 22.8 Best Practices & 흔한 함정
+## 22.8 배포 품질 — wheel, `abi3`, 타입 스텁, CI
+
+로컬에서 `maturin develop --release`가 성공했다고 실무 도입이 끝난 것은 아닙니다. 파이썬 사용자가 Rust 확장을 "그냥 패키지"처럼 쓰려면 세 가지가 맞아야 합니다. `pip install`로 wheel이 설치되고, IDE와 타입 체커가 API를 이해하며, CI가 운영 플랫폼별 산출물을 반복 가능하게 만들어야 합니다.
+
+### `pyproject.toml` 최소 운영 설정
+
+PyO3 프로젝트의 `pyproject.toml`은 파이썬 패키징의 진입점입니다. Rust 쪽 `Cargo.toml`과 역할이 겹쳐 보이지만, wheel 메타데이터와 빌드 백엔드는 여기서 결정됩니다.
+
+```toml
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "fast-agg"
+version = "0.1.0"
+description = "Rust-accelerated aggregation for Python"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+    "Typing :: Typed",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module", "pyo3/abi3-py39"]
+module-name = "fast_agg"
+python-source = "python"
+```
+
+`abi3-py39`는 중요한 선택입니다. 기본 PyO3 빌드는 Python 3.9, 3.10, 3.11, 3.12, 3.13마다 별도 wheel을 만들어야 합니다. `abi3`를 켜면 CPython의 안정 ABI만 사용해 하나의 wheel이 3.9 이상에서 동작합니다. 대신 일부 최신 C-API를 직접 쓰지 못하는 제약이 생깁니다. 일반적인 함수/클래스 바인딩, numpy 버퍼 처리, 에러 변환에는 충분하므로, 배포 범위가 넓은 라이브러리는 `abi3`를 기본값으로 검토하세요.
+
+### 타입 스텁(`.pyi`)을 같이 배포하라
+
+Rust로 작성한 모듈은 런타임에는 잘 보이지만, Python 타입 체커와 IDE는 Rust 내부 시그니처를 완전히 이해하지 못할 수 있습니다. 공개 API에는 `.pyi` 스텁을 제공하세요.
+
+```python
+# python/fast_agg/__init__.pyi
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+def aggregate(lines: Sequence[str]) -> dict[int, float]: ...
+def aggregate_parallel(lines: Sequence[str]) -> dict[int, float]: ...
+def square_all(values: object) -> object: ...
+```
+
+그리고 패키지가 타입 정보를 포함함을 알리는 `py.typed` 파일을 둡니다.
+
+```text
+python/fast_agg/py.typed
+```
+
+스텁은 단순 문서가 아닙니다. `mypy`, `pyright`, IDE 자동완성의 계약입니다. Python API를 유지한 채 엔진만 Rust로 바꾼다는 PyO3의 장점을 살리려면, 사용자에게 보이는 타입 경험도 기존 파이썬 패키지만큼 자연스러워야 합니다.
+
+### GitHub Actions wheel 빌드 매트릭스
+
+배포 자동화는 첫날부터 넣는 편이 낫습니다. 나중에 붙이면 "로컬 맥북에서는 되는데 Linux 운영 서버 wheel이 없다"는 문제가 배포 직전에 만납니다.
+
+```yaml
+name: wheels
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build wheels on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+          manylinux: auto
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}
+          path: dist
+```
+
+`abi3`를 켜면 Python 버전 매트릭스가 사라집니다. OS/아키텍처별 wheel만 만들면 됩니다. Linux에서는 `manylinux` 호환성이 중요합니다. 운영 서버의 glibc가 CI보다 오래된 경우 wheel이 import 단계에서 깨질 수 있으므로, `maturin-action`의 manylinux 빌드를 기본값으로 두는 것이 안전합니다.
+
+> **💡 Under the Hood: wheel 태그는 ABI 계약의 압축 표현이다**
+>
+> `fast_agg-0.1.0-cp313-cp313-macosx_14_0_arm64.whl` 같은 파일명은 단순한 장식이 아닙니다. 앞의 `cp313`은 Python 구현/버전, 뒤의 `cp313`은 ABI, 마지막은 플랫폼 태그입니다. `abi3`를 쓰면 ABI 태그가 `abi3`로 바뀌어 여러 Python 버전이 같은 wheel을 공유할 수 있습니다. `pip`는 설치 시 현재 인터프리터와 플랫폼에 맞는 태그를 계산해 호환 wheel만 고릅니다. 즉 wheel 파일명 자체가 "이 바이너리는 어디서 안전하게 로드될 수 있는가"라는 ABI 증명서입니다.
+
+### 배포 전 검증 체크리스트
+
+- [ ] `maturin build --release` 산출 wheel을 깨끗한 가상환경에 설치해 `import fast_agg`가 되는가?
+- [ ] `pip install dist/*.whl` 후 기존 파이썬 테스트 스위트가 Rust 경로와 폴백 경로 모두에서 통과하는가?
+- [ ] `mypy`/`pyright`가 `.pyi` 스텁을 읽고 공개 API 타입을 잡는가?
+- [ ] Linux wheel이 운영 환경과 같은 glibc 기준에서 로드되는가(`manylinux`)?
+- [ ] `abi3`를 켰다면 지원하려는 최소 Python 버전에서 실제 import/테스트가 통과하는가?
+- [ ] 패닉이 사용자에게 새지 않도록 `unwrap()`/`expect()`가 경계 밖 공개 함수에 남아 있지 않은가?
+
+PyO3 프로젝트의 완성도는 Rust 코드의 속도만으로 결정되지 않습니다. 파이썬 사용자가 기존 패키지와 같은 방식으로 설치하고, 타입 힌트를 받고, 장애 시 폴백할 수 있을 때 비로소 "엔진만 Rust인 파이썬 패키지"가 됩니다.
+
+---
+
+## 22.9 Best Practices & 흔한 함정
 
 PyO3를 실무에 도입할 때의 체크리스트와, 파이썬 엔지니어가 반복하는 실수들을 정리합니다.
 
@@ -647,15 +755,17 @@ PyO3를 실무에 도입할 때의 체크리스트와, 파이썬 엔지니어가
 
 ---
 
-## 22.9 맺음말: 새로운 Rustacean에게 — 그리고 책 전체를 마무리하며
+## 22.10 맺음말: Python과 Rust의 다리를 건너서
 
-이로써 **"Python to Rust Complete Guide"**의 22개 챕터, 긴 여정이 끝났습니다. 잠시 우리가 지나온 길을 돌아봅시다.
+이로써 Part 8, **Python과 Rust를 물리적으로 결합하는 여정**이 끝났습니다. 잠시 우리가 지나온 길을 돌아봅시다.
 
 Part 1에서 우리는 왜 파이썬 엔지니어가 Rust를 배우는지(GIL·GC·런타임 오버헤드의 한계), 그리고 `pip`/`poetry`/`venv`의 혼돈을 Cargo 하나로 통합하는 법을 보았습니다. Part 2에서 이 책의 심장인 **소유권(Ownership)·대여(Borrowing)·수명(Lifetime)**으로 GC 없이 사는 법을 배웠고, Part 3에서 파이썬의 풍부한 객체지향(상속·매직 메서드·Pydantic)을 **Struct·Trait·Enum**으로 해체해 재조립했습니다. Part 4에서 `try/except`를 버리고 **Option과 Result**로 실패를 타입에 담았으며, Part 5에서 컬렉션과 무비용 이터레이터를, Part 6에서 GIL을 벗어난 진짜 동시성(**Arc/Mutex**, tokio 비동기)을 익혔습니다. Part 7에서 매크로와 스마트 포인터로 메타프로그래밍의 깊은 곳을 보았고, Part 8에서 C FFI와 `unsafe`를 거쳐 마침내 이번 챕터에서 두 언어를 물리적으로 결합했습니다.
 
 이 모든 것을 관통하는 단 하나의 깨달음이 있습니다. **Rust는 파이썬을 대체하려고 온 언어가 아닙니다.** Rust는 파이썬의 밑단(C/C++)을 가장 안전하고 모던하게 교체하여, **파이썬 생태계를 더 빠르고 강력하게 만드는 최고의 파트너**입니다. `pydantic-core`, `polars`, `tokenizers`, `ruff`가 증명하듯, 미래의 고성능 파이썬은 점점 더 "Rust 엔진에 파이썬 API를 입힌" 형태가 될 것입니다. 그리고 이제 여러분은 그 엔진을 직접 만들 수 있습니다.
 
-그렇다면 다음에 무엇을 해야 할까요. 세 갈래의 길을 권합니다.
+하지만 언어와 FFI를 익히는 것만으로 제품은 출시되지 않습니다. 테스트, CLI, 웹 서비스, 성능 튜닝, 문서화, 배포 자동화가 뒤따라야 합니다. 그래서 이 책은 여기서 끝나지 않고 Part 9로 넘어갑니다. 다음 네 장은 "Rust를 안다"에서 "Rust로 프로덕션을 운영한다"로 넘어가는 다리입니다.
+
+그 전에, PyO3를 실제 코드베이스에 적용할 때의 세 갈래 길을 권합니다.
 
 **1) 가장 작은 실전부터.** 다음 주에 출근하면, 여러분의 코드베이스에서 가장 느린 함수 하나를 `py-spy`로 프로파일링하세요. 그 함수가 CPU 바운드이고, 입력·출력이 단순한 자료형이라면, `maturin new`로 프로젝트를 만들고 그 함수만 Rust로 옮겨보세요. 50줄짜리 첫 PyO3 모듈이 7배 빨라지는 경험은 백 마디 설명보다 강력합니다. 절대 전부 다 옮기지 마세요 — 가장 아픈 곳 한 군데만.
 
@@ -665,9 +775,7 @@ Part 1에서 우리는 왜 파이썬 엔지니어가 Rust를 배우는지(GIL·G
 
 10년간 파이썬으로 쌓아온 여러분의 직관 — 메모리 구조, 동시성, 시간복잡도, 시스템 설계 — 은 사라지지 않습니다. 오히려 Rust라는 새로운 렌즈를 통해 더 선명해집니다. 파이썬으로 "무엇을" 빠르게 만들지 결정하고, Rust로 "어떻게" 한계 없이 빠르게 만들지 실현하는 두 언어를 모두 쥔 엔지니어는, 둘 중 하나만 아는 엔지니어가 닿지 못하는 곳까지 갑니다.
 
-긴 여정을 끝까지 함께해 주셔서 감사합니다. 이제 진짜 시작입니다.
-
-환영합니다, 새로운 Rustacean. 🦀
+다음 Chapter 23에서는 이 코드를 오래 유지하기 위한 첫 번째 생산 도구, **테스트와 문서화**로 넘어갑니다. Python의 `pytest`와 `doctest` 경험을 Rust의 `cargo test`, doctest, `proptest`, `insta`, `nextest`로 확장하며, "컴파일되는 예제"가 어떻게 문서 품질을 바꾸는지 확인할 것입니다.
 
 ---
 

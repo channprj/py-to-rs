@@ -683,7 +683,117 @@ Alice -> Bob
 
 ---
 
-## 20.9 `Cow<T>`: 복사를 마지막 순간까지 미루기
+## 20.9 대안 설계 — `Rc<RefCell>` 대신 아레나와 인덱스
+
+`Rc<RefCell<Node>>`는 파이썬 객체 그래프와 가장 닮은 Rust 표현입니다. 그래서 배우기 쉽지만, 실무에서 항상 최선은 아닙니다. 노드마다 별도 힙 할당이 생기고, 참조 카운트 증감이 일어나며, `borrow_mut()` 실패가 런타임 패닉으로 바뀝니다. 그래프가 크고 성능이 중요하다면 **노드는 `Vec`에 연속 저장하고, 노드 간 연결은 인덱스로 표현**하는 편이 낫습니다.
+
+파이썬 개발자에게는 낯설 수 있습니다. 우리는 보통 객체가 다른 객체를 직접 가리키게 만듭니다.
+
+```python
+class Node:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.parent: Node | None = None
+        self.children: list[Node] = []
+```
+
+Rust의 인덱스 기반 설계는 "포인터" 대신 "배열 안의 위치"를 저장합니다.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct NodeId(usize);
+
+#[derive(Debug)]
+struct Node {
+    name: String,
+    parent: Option<NodeId>,
+    children: Vec<NodeId>,
+}
+
+#[derive(Debug, Default)]
+struct Tree {
+    nodes: Vec<Node>,
+}
+
+impl Tree {
+    fn add_root(&mut self, name: impl Into<String>) -> NodeId {
+        let id = NodeId(self.nodes.len());
+        self.nodes.push(Node {
+            name: name.into(),
+            parent: None,
+            children: Vec::new(),
+        });
+        id
+    }
+
+    fn add_child(&mut self, parent: NodeId, name: impl Into<String>) -> NodeId {
+        assert!(parent.0 < self.nodes.len(), "invalid parent id");
+        let id = NodeId(self.nodes.len());
+        self.nodes.push(Node {
+            name: name.into(),
+            parent: Some(parent),
+            children: Vec::new(),
+        });
+        self.nodes[parent.0].children.push(id);
+        id
+    }
+
+    fn path_to_root(&self, mut id: NodeId) -> Vec<&str> {
+        let mut path = Vec::new();
+        loop {
+            let node = &self.nodes[id.0];
+            path.push(node.name.as_str());
+            match node.parent {
+                Some(parent) => id = parent,
+                None => break,
+            }
+        }
+        path
+    }
+}
+
+fn main() {
+    let mut tree = Tree::default();
+    let ceo = tree.add_root("Alice");
+    let lead = tree.add_child(ceo, "Bob");
+    let dev = tree.add_child(lead, "Carol");
+
+    let path = tree.path_to_root(dev);
+    println!("{path:?}"); // ["Carol", "Bob", "Alice"]
+}
+```
+
+이 구조에는 `Rc`도 `RefCell`도 없습니다. 부모와 자식이 서로를 가리키지만, 순환 참조도 없습니다. `Tree` 하나가 모든 노드를 소유하고, 노드들은 `NodeId`라는 작은 복사 가능한 값으로 서로를 참조합니다. `NodeId`는 파이썬 객체 포인터가 아니라 데이터베이스의 primary key에 가깝습니다.
+
+이 방식의 장점은 큽니다.
+
+| 기준 | `Rc<RefCell<Node>>` | `Vec<Node>` + `NodeId` |
+|---|---|---|
+| 노드 저장 | 노드마다 힙 할당 | 연속 메모리 |
+| 참조 | 강/약 참조 카운트 | `usize` 인덱스 |
+| 가변성 | 런타임 대여 검사(`RefCell`) | `&mut Tree`가 전체 변경 권한 |
+| 순환 누수 | `Weak` 설계 필요 | 소유권 순환 없음 |
+| 직렬화 | 포인터 그래프 처리 필요 | `Vec`과 인덱스라 쉬움 |
+| 삭제 | 참조 카운트에 맡김 | 별도 free list/세대 번호 필요 |
+
+삭제가 필요하면 단순 `usize` 인덱스만으로는 부족합니다. 중간 노드를 지우면 뒤 노드의 인덱스가 바뀌거나, 빈 슬롯을 재사용할 때 오래된 `NodeId`가 다른 노드를 가리키는 버그가 생길 수 있습니다. 이때 `slotmap`이나 `generational-arena`가 등장합니다. 이 크레이트들은 키에 **세대 번호(generation)**를 붙여, 삭제된 슬롯을 재사용해도 오래된 키가 새 노드를 잘못 가리키지 못하게 합니다.
+
+> **💡 Under the Hood: 세대 번호는 ABA 문제를 막는 작은 타입 태그다**
+>
+> 인덱스 `42`의 노드를 지웠다가 새 노드를 같은 슬롯 `42`에 넣으면, 예전 `NodeId(42)`는 겉보기엔 여전히 유효해 보입니다. 이것이 ABA 문제입니다. `generational-arena`는 키를 `(index, generation)` 쌍으로 만듭니다. 슬롯을 재사용할 때 generation을 증가시키므로, 오래된 `(42, 3)`은 현재 슬롯의 `(42, 4)`와 맞지 않아 조회가 실패합니다. 포인터 안전성을 런타임 GC가 아니라 작은 정수 태그로 확보하는 셈입니다.
+
+결정 규칙은 이렇습니다.
+
+- **작은 객체 그래프, 파이썬 구조를 그대로 옮기는 학습/프로토타입**: `Rc<RefCell>`이 직관적입니다.
+- **트리/그래프가 크고 순회 성능이 중요**: `Vec` + 인덱스 또는 `petgraph`를 우선합니다.
+- **노드 삭제와 키 안정성이 필요**: `slotmap`/`generational-arena`를 씁니다.
+- **멀티스레드 공유 그래프**: `Arc<Mutex<...>>`보다 먼저 "정말 공유해야 하는가"를 묻고, 가능하면 actor/채널 모델로 소유자를 하나로 둡니다.
+
+Python 객체 그래프를 Rust로 옮길 때 가장 중요한 질문은 "어떻게 포인터를 흉내낼까"가 아니라 **"이 그래프의 진짜 소유자는 누구인가"**입니다. 소유자가 하나라면 `Vec`이 답일 가능성이 큽니다. 여러 소유자가 정말 필요할 때만 `Rc`가 등장합니다.
+
+---
+
+## 20.10 `Cow<T>`: 복사를 마지막 순간까지 미루기
 
 스마트 포인터 가족 중 실무에서 의외로 자주 쓰이는데 덜 알려진 것이 `Cow<T>`(Clone on Write)입니다. 이름 그대로, **수정이 일어나기 전까지는 빌린 데이터를 그대로 쓰다가, 수정하는 그 순간에만 복사(clone)**하는 영리한 타입입니다.
 
@@ -715,7 +825,7 @@ fn main() {
 
 ---
 
-## 20.10 Best Practices & 안티패턴
+## 20.11 Best Practices & 안티패턴
 
 스마트 포인터는 강력하지만, 파이썬 습관 그대로 쓰면 오히려 코드를 망칩니다. 실무 체크리스트입니다.
 
@@ -737,7 +847,7 @@ fn main() {
 
 ---
 
-## 20.11 흔한 함정 (Python 개발자가 자주 하는 실수)
+## 20.12 흔한 함정 (Python 개발자가 자주 하는 실수)
 
 ### 함정 1: `Rc`를 멀티스레드에 쓰려다 컴파일 실패
 
