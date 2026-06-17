@@ -248,6 +248,172 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 
 ---
 
+## D.13 바로 쓰는 조합 레시피
+
+표는 지도를 주지만, 실제 프로젝트를 시작할 때는 "그래서 `Cargo.toml`에 무엇을 넣는가"가 더 중요합니다. 자주 쓰는 조합을 네 가지로 압축합니다. 버전은 `cargo add`가 해결하게 두고, 여기서는 feature 선택과 역할 분리를 보세요.
+
+### JSON CLI 도구: `clap` + `serde` + `anyhow`
+
+파이썬의 `argparse` + `json` + `try/except` 스크립트에 해당합니다.
+
+```bash
+$ cargo add clap --features derive
+$ cargo add serde --features derive
+$ cargo add serde_json
+$ cargo add anyhow
+```
+
+```rust
+use anyhow::Context;
+use clap::Parser;
+use serde::Deserialize;
+use std::fs;
+
+#[derive(Parser)]
+struct Args {
+    #[arg(long)]
+    input: String,
+}
+
+#[derive(Deserialize)]
+struct Record {
+    id: u64,
+    score: f64,
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    let text = fs::read_to_string(&args.input)
+        .with_context(|| format!("failed to read {}", args.input))?;
+    let records: Vec<Record> = serde_json::from_str(&text)
+        .context("invalid JSON records")?;
+    let total: f64 = records.iter().map(|r| r.score).sum();
+    let id_checksum: u64 = records.iter().map(|r| r.id).sum();
+    println!("{} records, total={total}, ids={id_checksum}", records.len());
+    Ok(())
+}
+```
+
+핵심은 `anyhow::Context`입니다. 파이썬에서 예외 메시지에 파일명을 붙이려고 `raise RuntimeError(...) from e`를 쓰던 일을 `with_context`가 해줍니다.
+
+### 비동기 HTTP 수집기: `tokio` + `reqwest` + `tracing`
+
+파이썬의 `asyncio` + `aiohttp` + 구조화 로깅 조합입니다.
+
+```bash
+$ cargo add tokio --features macros,rt-multi-thread,time
+$ cargo add reqwest --features json
+$ cargo add tracing tracing-subscriber
+```
+
+```rust
+use std::time::Duration;
+use tracing::{info, warn};
+
+#[tokio::main]
+async fn main() -> Result<(), reqwest::Error> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
+
+    let client = reqwest::Client::new();
+    let response = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.get("https://example.com").send(),
+    )
+    .await;
+
+    match response {
+        Ok(Ok(resp)) => info!(status = %resp.status(), "request completed"),
+        Ok(Err(err)) => warn!(error = %err, "request failed"),
+        Err(_) => warn!("request timed out"),
+    }
+
+    Ok(())
+}
+```
+
+`tracing`의 장점은 문자열 로그가 아니라 구조화된 필드(`status = ...`, `error = ...`)가 남는다는 점입니다. 나중에 JSON formatter나 OpenTelemetry로 바꿔도 호출부는 그대로 둡니다.
+
+### 공유 캐시 서비스: `dashmap` 또는 `Arc<RwLock<_>>`
+
+Chapter 17에서 보았듯 기본은 `Arc<RwLock<HashMap<...>>>`입니다. 하지만 키 단위 경합이 높다면 `DashMap`이 더 단순합니다.
+
+```bash
+$ cargo add dashmap
+```
+
+```rust
+use dashmap::DashMap;
+use std::sync::Arc;
+use std::thread;
+
+fn main() {
+    let cache = Arc::new(DashMap::<String, u64>::new());
+    let mut handles = Vec::new();
+
+    for worker in 0..4 {
+        let cache = Arc::clone(&cache);
+        handles.push(thread::spawn(move || {
+            for i in 0..10_000 {
+                let key = format!("tenant:{}:{}", worker, i % 128);
+                *cache.entry(key).or_insert(0) += 1;
+            }
+        }));
+    }
+
+    for h in handles {
+        h.join().unwrap();
+    }
+
+    println!("entries = {}", cache.len());
+}
+```
+
+`DashMap`은 내부 sharding으로 락 경합을 줄입니다. 단, 여러 키를 한 트랜잭션처럼 함께 갱신해야 한다면 `DashMap`이 자동으로 비즈니스 불변식을 지켜주지는 않습니다. 그때는 별도 락 순서 규칙이나 actor 모델을 설계해야 합니다.
+
+### PyO3 확장: `pyo3` + `maturin` + 선택적 `numpy`
+
+Chapter 22와 부록 E의 기본 조합입니다.
+
+```bash
+$ maturin new fast-agg --bindings pyo3
+$ cd fast-agg
+$ cargo add rayon
+$ cargo add pyo3 --features extension-module,abi3-py39
+# numpy 배열을 zero-copy로 받을 때만
+$ cargo add numpy
+```
+
+```toml
+[lib]
+name = "fast_agg"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+rayon = "1"
+```
+
+```rust
+use pyo3::prelude::*;
+
+#[pyfunction]
+fn sum(values: Vec<f64>) -> f64 {
+    values.iter().sum()
+}
+
+#[pymodule]
+fn fast_agg(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(sum, m)?)?;
+    Ok(())
+}
+```
+
+첫 버전은 자동 변환(`Vec<f64>`)으로 단순하게 시작하세요. 입력이 커져 복사 비용이 보이면 그때 `numpy::PyReadonlyArray1`로 제로카피를 도입합니다. 처음부터 모든 경계를 최적화하려 들면 API 설계가 굳기 전에 복잡도가 폭증합니다.
+
+---
+
 ## References
 
 - https://crates.io/

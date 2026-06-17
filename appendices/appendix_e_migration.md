@@ -278,7 +278,173 @@ aggregate = _aggregate
 
 ---
 
-## E.8 실전 사례 패턴 — 거인들이 택한 길
+## E.8 미니 프로젝트 청사진 — 로그 집계 함수 하나만 옮기기
+
+이제 플레이북을 한 파일 단위로 압축해 봅시다. 목표는 거창한 서비스 재작성도, 새 마이크로서비스도 아닙니다. **순수 파이썬 로그 집계 함수 하나를 Rust로 교체하되, 오라클 테스트와 폴백 경로를 남기는 것**입니다.
+
+기존 파이썬 기준 구현은 다음과 같습니다.
+
+```python
+# legacy.py
+from __future__ import annotations
+
+def aggregate(lines: list[str]) -> dict[int, float]:
+    totals: dict[int, float] = {}
+    for line in lines:
+        sensor, value = line.split(",", 1)
+        sid = int(sensor)
+        totals[sid] = totals.get(sid, 0.0) + float(value)
+    return totals
+```
+
+Rust 구현은 같은 시그니처를 유지합니다. 처음부터 제로카피까지 욕심내지 말고, `list[str] -> dict[int, float]` 자동 변환으로 정확성을 먼저 확보합니다.
+
+```rust
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
+use std::collections::HashMap;
+
+#[pyfunction]
+fn aggregate(lines: Vec<String>) -> PyResult<HashMap<i64, f64>> {
+    let mut totals = HashMap::new();
+
+    for line in lines {
+        let (sensor, value) = line
+            .split_once(',')
+            .ok_or_else(|| PyValueError::new_err(format!("invalid line: {line}")))?;
+        let sid: i64 = sensor
+            .parse()
+            .map_err(|_| PyValueError::new_err(format!("invalid sensor id: {sensor}")))?;
+        let value: f64 = value
+            .parse()
+            .map_err(|_| PyValueError::new_err(format!("invalid value: {value}")))?;
+        *totals.entry(sid).or_insert(0.0) += value;
+    }
+
+    Ok(totals)
+}
+
+#[pymodule]
+fn fast_agg(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(aggregate, m)?)?;
+    Ok(())
+}
+```
+
+여기서 중요한 것은 `unwrap()`이 하나도 없다는 점입니다. 입력이 깨졌을 때 Rust 패닉이 아니라 파이썬의 `ValueError`로 올라갑니다. 마이그레이션 초기에 가장 많이 놓치는 품질 기준입니다.
+
+오라클 테스트는 기존 파이썬 함수를 정답지로 삼습니다.
+
+```python
+# tests/test_fast_agg.py
+from __future__ import annotations
+
+import os
+import random
+
+from legacy import aggregate as aggregate_py
+
+try:
+    from fast_agg import aggregate as aggregate_rust
+except ImportError:  # wheel이 없는 개발 환경
+    aggregate_rust = None
+
+
+def make_lines(seed: int, n: int) -> list[str]:
+    rng = random.Random(seed)
+    return [
+        f"{rng.randint(0, 127)},{rng.random():.6f}"
+        for _ in range(n)
+    ]
+
+
+def test_rust_matches_python() -> None:
+    if aggregate_rust is None:
+        return
+    for seed in range(20):
+        lines = make_lines(seed, 1_000)
+        expected = aggregate_py(lines)
+        actual = aggregate_rust(lines)
+        assert expected.keys() == actual.keys()
+        for key in expected:
+            assert abs(expected[key] - actual[key]) < 1e-9
+
+
+def test_fallback_switch() -> None:
+    os.environ["USE_RUST_AGG"] = "0"
+    from wrapper import aggregate
+
+    assert aggregate(["1,2.5", "1,0.5"]) == {1: 3.0}
+```
+
+운영 코드에서는 직접 `fast_agg.aggregate`를 import하지 말고, 얇은 wrapper를 둡니다.
+
+```python
+# wrapper.py
+from __future__ import annotations
+
+import os
+
+from legacy import aggregate as aggregate_py
+
+if os.getenv("USE_RUST_AGG", "0") == "1":
+    try:
+        from fast_agg import aggregate as aggregate_impl
+    except ImportError:
+        aggregate_impl = aggregate_py
+else:
+    aggregate_impl = aggregate_py
+
+
+def aggregate(lines: list[str]) -> dict[int, float]:
+    return aggregate_impl(lines)
+```
+
+이 구조의 장점은 배포 실패를 재배포 없이 되돌릴 수 있다는 것입니다. wheel import가 실패해도 파이썬 구현으로 떨어지고, 성능 또는 정확성 이상이 보이면 `USE_RUST_AGG=0`으로 즉시 롤백합니다. 카나리는 `USE_RUST_AGG=1`을 일부 워커나 일부 트래픽에만 적용하면 됩니다.
+
+벤치마크는 반드시 wrapper가 아니라 양쪽 구현을 직접 비교합니다. 그래야 폴백 로직과 환경 변수 검사 비용이 끼지 않습니다.
+
+```python
+# bench.py
+from __future__ import annotations
+
+import random
+import time
+
+from legacy import aggregate as aggregate_py
+from fast_agg import aggregate as aggregate_rust
+
+lines = [
+    f"{random.randint(0, 999)},{random.random():.6f}"
+    for _ in range(1_000_000)
+]
+
+
+def bench(name: str, fn) -> None:
+    start = time.perf_counter()
+    result = fn(lines)
+    elapsed = time.perf_counter() - start
+    print(f"{name:12s} {elapsed:7.3f}s keys={len(result)}")
+
+
+bench("python", aggregate_py)
+bench("rust", aggregate_rust)
+```
+
+이 미니 프로젝트는 작지만, 실제 마이그레이션의 핵심을 모두 담습니다.
+
+- 경계가 한 문장으로 설명됩니다: `list[str] -> dict[int, float]`.
+- 기존 파이썬 구현이 오라클로 남아 있습니다.
+- Rust 구현은 패닉 대신 파이썬 예외를 반환합니다.
+- 테스트가 양쪽 결과를 대조합니다.
+- wrapper가 폴백과 카나리를 가능하게 합니다.
+- 벤치마크가 `--release` wheel을 기준으로 변환 비용까지 포함합니다.
+
+이 단위를 한 번 성공시키면, 그다음 핫스팟도 같은 템플릿으로 반복하면 됩니다. 마이그레이션을 프로젝트가 아니라 **반복 가능한 수술 절차**로 만드는 것이 핵심입니다.
+
+---
+
+## E.9 실전 사례 패턴 — 거인들이 택한 길
 
 업계의 대표적인 Rust 기반 파이썬 라이브러리들의 공통점은 **하나같이 전략 1(PyO3 네이티브 확장)**이며, **파이썬 API를 그대로 유지한 채 엔진만 Rust로 교체**했다는 것입니다.
 
@@ -295,7 +461,7 @@ aggregate = _aggregate
 
 ---
 
-## E.9 마이그레이션 마인드셋 — 1%의 핫스팟을 노려라
+## E.10 마이그레이션 마인드셋 — 1%의 핫스팟을 노려라
 
 이 부록을 한 문장으로 압축하면 첫 절에서 띄워 둔 그 문장으로 돌아옵니다. **"전부 다시 짜지 말고 1%의 핫스팟을 노려라."**
 

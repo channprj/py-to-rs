@@ -397,6 +397,93 @@ $ CARGO_TARGET_DIR=/tmp/shared-target cargo build           # target/ 공유로 
 
 ---
 
+## A.8 프로젝트 품질 게이트 레시피
+
+명령어를 아는 것과 팀이 매번 같은 품질 기준으로 검증하는 것은 다릅니다. Python 프로젝트에서 `ruff format && ruff check && pytest`를 Makefile이나 CI에 묶어두듯, Rust 프로젝트도 Cargo 명령을 하나의 게이트로 묶어두는 편이 좋습니다.
+
+### 로컬 사전 점검
+
+가장 작은 기본 게이트입니다.
+
+```bash
+$ cargo fmt --all -- --check
+$ cargo clippy --all-targets --all-features -- -D warnings
+$ cargo test --all-features
+```
+
+각 명령의 의미는 다음과 같습니다.
+
+| 명령 | 잡는 문제 | Python 대응 |
+|---|---|---|
+| `cargo fmt --check` | 포맷 불일치 | `black --check`, `ruff format --check` |
+| `cargo clippy -D warnings` | 관용구 위반, 잠재 버그 | `ruff check`, `pylint` |
+| `cargo test --all-features` | unit/integration/doctest 실패 | `pytest` + `doctest` |
+
+`--all-targets`는 라이브러리뿐 아니라 예제, 테스트, 벤치 타깃까지 clippy가 보게 합니다. `--all-features`는 optional feature 조합에서만 깨지는 코드를 잡는 데 유용하지만, feature 간 충돌을 의도한 크레이트라면 별도 feature matrix를 구성해야 합니다.
+
+### 문서와 공개 API 확인
+
+라이브러리라면 문서도 빌드 대상입니다.
+
+```bash
+$ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+$ cargo test --doc
+```
+
+Rust 문서 주석의 예제는 `cargo test`에 포함되지만, 문서 생성 자체의 경고(깨진 intra-doc link 등)는 `cargo doc`에서 더 명확히 드러납니다. 공개 API 문서에 잘못된 intra-doc link를 넣으면 `RUSTDOCFLAGS="-D warnings"`가 CI를 빨갛게 만들어줍니다. Python 패키지에서 Sphinx 링크 깨짐을 별도 검사하는 것과 같은 위치입니다.
+
+### 벤치마크와 회귀 감시
+
+성능을 약속하는 크레이트라면 `criterion` 벤치마크를 별도 게이트로 둡니다. 다만 CI 공유 머신의 노이즈가 크므로, pull request마다 절대 수치를 실패 조건으로 삼기보다 추세를 기록하는 편이 안전합니다.
+
+```bash
+$ cargo bench --bench aggregate
+$ cargo test --release --all-features
+```
+
+`cargo test --release`는 드물게 중요합니다. 디버그 빌드에서는 정수 오버플로가 패닉하지만 릴리스 빌드에서는 wrapping 될 수 있고(Chapter 1), 최적화가 켜져야만 드러나는 `unsafe` UB 징후도 있습니다. 모든 테스트를 매번 릴리스로 돌릴 필요는 없지만, 성능·FFI·SIMD·unsafe가 있는 프로젝트는 릴리스 테스트를 주기적으로 포함하세요.
+
+### CI용 최소 워크플로
+
+```yaml
+name: rust
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --all-features
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features
+```
+
+이 워크플로는 작지만 강합니다. 포맷, 린트, 테스트, 문서를 모두 같은 툴체인 위에서 검증합니다. PyO3 프로젝트라면 여기에 `maturin build --release`와 wheel import 테스트를 추가하고, 웹 서비스라면 Docker 이미지 빌드와 smoke test를 붙이면 됩니다.
+
+### MSRV와 최신 stable을 분리하라
+
+라이브러리가 `rust-version = "1.80"` 같은 MSRV(Minimum Supported Rust Version)를 선언한다면, CI는 최소 두 축을 가져야 합니다.
+
+```yaml
+strategy:
+  matrix:
+    toolchain: [stable, "1.80.0"]
+```
+
+최신 stable은 앞으로 깨질 문제를, MSRV는 "우리가 약속한 최소 컴파일러에서 아직 빌드되는가"를 검증합니다. Python 패키지가 `requires-python = ">=3.9"`를 선언했다면 3.9와 최신 3.x를 모두 테스트하는 것과 같은 원리입니다.
+
+---
+
 이상이 Cargo·rustup의 일상 작업에 필요한 명령과 매니페스트 필드의 핵심 레퍼런스입니다. 개념적 배경과 "왜"는 Chapter 2를, 각 명령의 전체 옵션은 `cargo <cmd> --help`와 [The Cargo Book](https://doc.rust-lang.org/cargo/)을 참조하세요.
 
 ---
