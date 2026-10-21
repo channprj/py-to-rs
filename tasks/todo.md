@@ -123,3 +123,25 @@
   - 로컬 마크다운 링크 37개 파일 검사 통과.
   - 코드 펜스 균형 검사 통과.
   - `git diff --check` 통과.
+
+## Review (3차 감사, 2026-10-22)
+
+### 기준
+- rustc 1.99.1 (`58cf8f9c3`, 2026-10-13), cargo 1.99.1, rustup 1.29.2. `cargo new` 기본 에디션은 2024. 본문 예제는 edition 2021.
+- CPython 현재 stable 라인은 3.15이고 3.14도 지원이다. 이 기계의 `python3`는 3.13.6이라, 빈 문자열 크기 41은 3.13.6 라벨을 유지한다. 3.15 인터프리터는 PATH에 없다.
+
+### 읽은 범위
+- 독자 문서 33개(서문, 1–26장, 부록 A–F, README, BOOK_TOC)의 러스트 펜스 561개를 두 번 분류·컴파일했다. 상대 링크 깨짐 0, 펜스 불균형 0.
+- 의존 크레이트가 필요한 예제 75개를 edition 2021 라이브러리로 `cargo check`했다. 절차적 매크로 3개는 `proc-macro` 크레이트로 확인했다.
+- 툴체인, 에디션, 페이지 수, free-threading, abi3, 다음 장 포인터를 대조했다.
+
+### 고친 것
+- 현재 시제 설치 안내, `cargo new` 에디션 2024, 페이지 수(22장 시절 ~600은 과거 기록, 독자 본문은 A4 약 800).
+- PyO3 0.30 (`detach`/`attach`/`bind`/`IntoPyObject`/`Py<PyAny>`/`cast`, abi3 바닥 `abi3-py312`), clap, axum, tokio, serde, criterion 0.8 + `std::hint::black_box`, itertools 0.15 `chunk_by`.
+- 부록 C `count_words`의 E0106 수명, 부록 A에서 Cargo가 넣지 않는 `env!("GIT_HASH")`.
+- 진단 본문이 어긋난 패닉·에러 인용.
+
+### 라벨을 유지한 측정
+- rustc 1.90 / 1.96, CPython 3.13.6, criterion 0.5 시간, PyO3 0.22 벤치, dhat `341,088` 바이트. 다시 재지 않았다.
+- 발췌, 연습 빈칸, "핵심만" 스케치(ch16 rayon 비교, ch25 라우터 조각, ch19 expand)는 단독 `cargo run` 프로그램이 아니다.
+- 의도적 실패(부록 B before, ch7 `E0515` 등)는 rustc 1.99.1의 에러 코드와 맞는다. 패닉 헤더의 OS 스레드 번호는 실행마다 달라 본문에 찍지 않았다.
