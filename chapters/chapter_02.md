@@ -218,8 +218,8 @@ authors = ["Rustacean <rust@example.com>"]
 rust-version = "1.74"                  # MSRV: 이 버전 미만에선 빌드 거부
 
 [dependencies]
-axum = "0.7"                           # fastapi 대체 (웹 프레임워크)
-tokio = { version = "1.40", features = ["macros", "rt-multi-thread"] }  # 비동기 런타임
+axum = "0.8"                           # fastapi 대체 (웹 프레임워크). 0.8.9가 1.99.1에서 빌드됨
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread"] }  # 비동기 런타임
 serde = { version = "1.0", features = ["derive"] }   # pydantic 대체 (직렬화)
 
 [dev-dependencies]
@@ -256,7 +256,7 @@ cc = "1.0"                             # build.rs에서만 쓰는 의존성 (C �
 serde = { version = "1.0", features = ["derive"] }
 
 # tokio의 풀 기능 대신 필요한 부분만. 멀티스레드 런타임 + 매크로만.
-tokio = { version = "1.40", default-features = false, features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.54", default-features = false, features = ["macros", "rt-multi-thread"] }
 
 # reqwest에서 무거운 OpenSSL 대신 순수 Rust TLS(rustls)를 선택.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -338,7 +338,7 @@ members = [
 
 # 모든 멤버가 공유하는 의존성 버전 (DRY)
 [workspace.dependencies]
-tokio = { version = "1.40", features = ["full"] }
+tokio = { version = "1.54", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 ```
 
@@ -641,7 +641,7 @@ $ cargo tree -i serde             # serde를 누가 끌어오는지 역추적
 ```text
 $ cargo install serde
     Updating crates.io index
-error: there is nothing to install in `serde v1.0.228`, because it has no binaries
+error: there is nothing to install in `serde v1.0.229`, because it has no binaries
 `cargo install` is only for installing programs, and can't be used with libraries.
 To use a library crate, add it as a dependency to a Cargo project with `cargo add`.
 ```
@@ -967,7 +967,7 @@ Rustlings 스타일로, 손으로 직접 풀어 보세요. 각 문항 아래 '�
 
 **문제 3 — `cargo install`의 함정.** 동료가 "프로젝트에 `serde`를 쓰려고 `cargo install serde`를 했는데 에러가 나요"라고 합니다. 무슨 에러가 나며, 올바른 명령은 무엇인가요? `cargo install`과 `cargo add`는 각각 파이썬의 무엇에 대응하나요?
 
-> **정답 스케치:** `serde`는 라이브러리(바이너리 없음)라 `cargo install`이 거부합니다. 에러 메시지: `there is nothing to install in \`serde v1.0.228\`, because it has no binaries` / `cargo install is only for installing programs, and can't be used with libraries.` 올바른 명령은 `cargo add serde --features derive`입니다. 대응: `cargo install`은 전역 CLI 도구 설치이므로 파이썬의 `pipx install`에, `cargo add`는 프로젝트 의존성 추가이므로 `poetry add`/`pip install`(프로젝트 맥락)에 해당합니다.
+> **정답 스케치:** `serde`는 라이브러리(바이너리 없음)라 `cargo install`이 거부합니다. 에러 메시지: `there is nothing to install in \`serde v1.0.229\`, because it has no binaries` / `cargo install is only for installing programs, and can't be used with libraries.` 올바른 명령은 `cargo add serde --features derive`입니다. 대응: `cargo install`은 전역 CLI 도구 설치이므로 파이썬의 `pipx install`에, `cargo add`는 프로젝트 의존성 추가이므로 `poetry add`/`pip install`(프로젝트 맥락)에 해당합니다.
 
 **문제 4 — nightly 기능과 컴파일러 에러.** stable 1.99.1에서 아래 코드를 컴파일하면 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
 
