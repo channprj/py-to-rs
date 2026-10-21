@@ -293,6 +293,9 @@ aggregate_5xx/fast/100k  time:   [2.71 ms 2.74 ms 2.78 ms]
 `criterion`은 강력하지만 의존성이 무겁고(통계·플로팅 라이브러리 다수) 보일러플레이트가 있습니다. 더 가볍고 선언적인 대안이 `divan`입니다. 같은 벤치마크를 `divan`으로 쓰면 이렇습니다.
 
 ```rust
+// Cargo.toml (dev-dependency): divan = "0.1"
+// 2026-10-22, divan 0.1.21, rustc 1.99.1에서 이 시그니처는 cargo check --benches를 통과했다.
+// 아래 시간 표는 그때 다시 재지 않은 기존 기록이다.
 use perf_demo::{aggregate_5xx_fast, aggregate_5xx_slow, make_lines};
 
 fn main() {
@@ -465,6 +468,7 @@ CPU 속도와 메모리 속도의 격차는 갈수록 벌어지고 있습니다.
 먼저 "어디서 얼마나 할당하는가"를 측정합니다. Python의 `tracemalloc`에 대응하는 도구가 `dhat`입니다. 전역 할당자(global allocator)를 교체해 모든 힙 할당을 추적합니다.
 
 ```rust
+// Cargo.toml: dhat = "0.3"
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
@@ -490,7 +494,7 @@ dhat: At t-gmax: 341,088 bytes in 10,003 blocks
 dhat: At t-end:  1,088 bytes in 2 blocks
 ```
 
-`10,003 blocks` = 10,000개의 `String` + `Vec`의 재할당들. 총 341,088바이트를 할당했습니다. `dhat`은 `dhat-heap.json`도 생성하는데, [DHAT 뷰어](https://nnethercote.github.io/dh_view/dh_view.html)에 올리면 "어느 호출 위치(call site)가 얼마나 할당했는가"를 트리로 봅니다. 26.4의 `aggregate_5xx_slow`를 이걸로 프로파일하면 `String` 할당이 압도적임이 한눈에 드러납니다 — 그래서 `fast` 버전이 4.8배 빨랐던 것입니다. **할당 프로파일은 마이크로 최적화의 나침반입니다.** 더 무거운 도구로는 `heaptrack`(Linux), valgrind massif가 있습니다.
+`10,003 blocks` = 10,000개의 `String` + `Vec`의 재할당들. 총 341,088바이트를 할당했습니다. 2026-10-22에 rustc 1.99.1, dhat 0.3.3, `--release`로 다시 실행해도 위 세 줄은 같았습니다. 그 뒤에 `dhat-heap.json`을 저장했다는 한 줄이 더 나옵니다. `dhat`은 `dhat-heap.json`도 생성하는데, [DHAT 뷰어](https://nnethercote.github.io/dh_view/dh_view.html)에 올리면 "어느 호출 위치(call site)가 얼마나 할당했는가"를 트리로 봅니다. 26.4의 `aggregate_5xx_slow`를 이걸로 프로파일하면 `String` 할당이 압도적임이 한눈에 드러납니다 — 그래서 `fast` 버전이 4.8배 빨랐던 것입니다. **할당 프로파일은 마이크로 최적화의 나침반입니다.** 더 무거운 도구로는 `heaptrack`(Linux), valgrind massif가 있습니다.
 
 ### 캐시 친화적 레이아웃 — SoA vs AoS
 

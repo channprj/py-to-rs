@@ -393,9 +393,11 @@ fn main() {
     match cell.try_borrow_mut() {
         Ok(_) => println!("두 번째 대여 성공"),
         Err(e) => println!("두 번째 대여 거부됨: {e}"), // RefCell already borrowed
-    }
+    };
 }
 ```
+
+`match`를 `main`의 마지막 식으로 두면 rustc 1.99.1이 `error[E0597]`을 냅니다. `try_borrow_mut()`의 `Result` 임시값이 `cell`보다 오래 산다는 진단입니다. 닫는 중괄호 뒤의 세미콜론이 그 임시값을 먼저 버립니다. 실행하면 `두 번째 대여 거부됨: RefCell already borrowed`가 나옵니다.
 
 ### `Cell<T>`: 더 가벼운 사촌
 

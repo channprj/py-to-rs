@@ -451,11 +451,11 @@ fn main() {
 ```
 
 ```text
-thread 'main' panicked at src/main.rs:3:18:
-byte index 2 is not a char boundary; it is inside '안' (bytes 0..3 of `안녕하세요`)
+thread 'main' panicked at src/main.rs:3:22:
+end byte index 2 is not a char boundary; it is inside '안' (bytes 0..3 of string)
 ```
 
-`byte index 2 is not a char boundary; it is inside '안' (bytes 0..3)` — 에러 메시지가 정확히 무엇이 잘못됐는지 알려줍니다. `'안'`은 바이트 0~3을 차지하는데, 우리가 바이트 2에서 잘라 글자를 두 동강 냈다는 것입니다.
+`end byte index 2 is not a char boundary; it is inside '안' (bytes 0..3 of string)` — 에러 메시지가 정확히 무엇이 잘못됐는지 알려줍니다. rustc 1.99.1(2026-10-22)의 문구입니다. `'안'`은 바이트 0~3을 차지하는데, 우리가 바이트 2에서 잘라 글자를 두 동강 냈다는 것입니다.
 
 ### `.len()`, `.chars()`, `.bytes()`, 그리고 그래핌
 
@@ -910,8 +910,8 @@ fn main() {
 
 ```toml
 # Cargo.toml
-[dependencies]
-criterion = "0.5"
+[dev-dependencies]
+criterion = "0.8"
 
 [[bench]]
 name = "vec_ops"
@@ -920,7 +920,8 @@ harness = false
 
 ```rust
 // benches/vec_ops.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 const N: usize = 1_000_000;
 
@@ -959,7 +960,7 @@ criterion_group!(benches, bench_vec);
 criterion_main!(benches);
 ```
 
-`cargo bench`로 실행한 실측 결과입니다(Apple Silicon, `--release`. 절대값은 머신마다 다르지만 배수는 일관적입니다).
+`cargo bench`로 실행한 실측 결과입니다(Apple Silicon, `--release`. 절대값은 머신마다 다르지만 배수는 일관적입니다). 시간은 예전 `criterion` 0.5 하니스의 기록이고, 다시 재지 않았습니다. 위 하니스는 그 뒤 `criterion` 0.8로 올리고 `black_box`만 `std::hint::black_box`로 바꿨습니다. 0.8에서 `criterion::black_box`는 deprecated이고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 ```text
 vec_ops/push_grow       time:   [1.0500 ms 1.0713 ms 1.1020 ms]
@@ -1169,7 +1170,7 @@ fn evens(v: ???) -> Vec<i32> { ??? }
 fn first_char(s: &str) -> Option<char> { ??? }
 ```
 
-> **정답 스케치.** `s[0]`은 `error[E0277]: the type str cannot be indexed by {integer}`로 컴파일조차 안 됩니다. `&s[0..1]`은 ASCII면 되지만 한글(`'안'`은 3바이트)에서 `byte index 1 is not a char boundary` 패닉입니다. 정답은 `chars()` 이터레이터의 첫 원소입니다.
+> **정답 스케치.** `s[0]`은 `error[E0277]: the type str cannot be indexed by {integer}`로 컴파일조차 안 됩니다. `&s[0..1]`은 ASCII면 되지만 한글(`'안'`은 3바이트)에서 `end byte index 1 is not a char boundary` 패닉입니다. 정답은 `chars()` 이터레이터의 첫 원소입니다.
 >
 > ```rust
 > fn first_char(s: &str) -> Option<char> {

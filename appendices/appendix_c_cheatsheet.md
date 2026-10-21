@@ -157,7 +157,7 @@ fn main() {
 
     // 바이트 슬라이스는 가능하지만 UTF-8 경계를 벗어나면 런타임 패닉
     let bytes = &s[0..1]; // OK: 'h'는 1바이트
-    // let bad = &s[0..2]; // 🚨 panic! byte index 2 is not a char boundary
+    // let bad = &s[0..2]; // 🚨 panic! end byte index 2 is not a char boundary
 
     // 안전한 방법: chars() 이터레이터로 접근
     let first: Option<char> = s.chars().next();      // Some('h')

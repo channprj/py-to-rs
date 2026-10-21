@@ -794,10 +794,10 @@ CPython 대비 약 **15~20배**, PyPy 대비 약 **6배**입니다. Chapter 1에
 
 ### 실무 크레이트: `itertools`와 `rayon`
 
-표준 라이브러리 이터레이터로 부족할 때, [`itertools`](https://docs.rs/itertools) 크레이트가 파이썬 `itertools`의 거의 모든 것을 제공합니다 — `chunk_by`, `unique`, `cartesian_product`, `sorted`, `dedup`, `tuple_windows` 등. (인접 그룹핑 어댑터는 0.13에서 `group_by`가 `chunk_by`로 이름이 바뀌었습니다. 표준 라이브러리에 `slice::group_by`가 안정화되면서 이름 충돌을 피하기 위한 변경이니, 옛 자료의 `group_by`는 `chunk_by`로 읽으세요.)
+표준 라이브러리 이터레이터로 부족할 때, [`itertools`](https://docs.rs/itertools) 크레이트가 파이썬 `itertools`의 거의 모든 것을 제공합니다 — `chunk_by`, `unique`, `cartesian_product`, `sorted`, `dedup`, `tuple_windows` 등. 인접 그룹핑 어댑터는 itertools 0.13에서 `group_by`가 `chunk_by`로 바뀌었고, 0.15에서도 그 이름입니다. 표준 라이브러리의 안정 메서드는 `[T]::chunk_by`이고, `group_by`는 없습니다. 옛 자료의 `group_by`는 `chunk_by`로 읽으세요.
 
 ```rust
-// Cargo.toml: itertools = "0.13"
+// Cargo.toml: itertools = "0.15"
 use itertools::Itertools;
 
 fn main() {
@@ -825,7 +825,7 @@ fn main() {
 | `zip(a, b)` | `a.iter().zip(b)` | 짧은 쪽에서 멈춤(동일) |
 | `itertools.chain(a, b)` | `a.iter().chain(b)` | 이어붙이기(동일) |
 | `zip(a, b, c)` (3개+) | `itertools::izip!(a, b, c)` | 표준 `zip`은 2개만, `izip!`은 가변 개수 |
-| `itertools.groupby(xs, key)` | `xs.iter().chunk_by(key)` | **0.13에서 `group_by`→`chunk_by` rename.** 둘 다 인접 그룹만, 정렬 선행 필요 |
+| `itertools.groupby(xs, key)` | `xs.iter().chunk_by(key)` | **itertools 0.13에서 `group_by`→`chunk_by`. 0.15도 같다.** 표준은 `[T]::chunk_by`. 둘 다 인접 그룹만, 정렬 선행 필요 |
 | `set(xs)` / `dict.fromkeys` | `xs.into_iter().unique()` | `unique`는 순서 보존 + lazy(첫 등장만) |
 | `sorted(xs)` | `xs.into_iter().sorted()` | `itertools::sorted`, 내부적으로 `Vec` 수집 후 정렬 |
 | `itertools.accumulate(xs)` | `xs.iter().scan(...)` | 표준 `scan`이 가장 가까움(중간 누적 방출) |

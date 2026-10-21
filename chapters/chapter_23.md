@@ -443,7 +443,7 @@ test src/doctest_check.rs - doctest_check::doc_norun (line 14) - compile ... ok
 
 ```toml
 [dev-dependencies]
-proptest = "1.11.0"
+proptest = "1.12"
 ```
 
 `tests/properties.rs`에 `Cents`의 불변식 네 가지를 선언합니다.
@@ -521,7 +521,7 @@ minimal failing input: n = 1000
 	global rejects: 0
 ```
 
-`minimal failing input: n = 1000`. 처음 발견한 거대한 무작위 값이 아니라, 불변식을 깨는 **경계값 1000**까지 깎아낸 것입니다. 디버깅 관점에서 이것은 엄청난 가치입니다 — "743812에서 실패"는 막막하지만 "1000에서 실패"는 즉시 "아, 경계가 999가 아니라 1000이었구나"를 알려줍니다.
+`minimal failing input: n = 1000`. 처음 발견한 거대한 무작위 값이 아니라, 불변식을 깨는 **경계값 1000**까지 깎아낸 것입니다. 이 한 줄은 2026-10-22에 proptest 1.12.0, rustc 1.99.1에서 다시 확인했습니다. 위의 파일 줄 번호는 이 책 스니펫 기준입니다. 디버깅 관점에서 이것은 엄청난 가치입니다 — "743812에서 실패"는 막막하지만 "1000에서 실패"는 즉시 "아, 경계가 999가 아니라 1000이었구나"를 알려줍니다.
 
 > **💡 Under the Hood — Shrinking은 어떻게 동작하는가**
 >
