@@ -1,6 +1,6 @@
 # 부록 A. Cargo & 프로젝트 레퍼런스
 
-이 부록은 본문(특히 Chapter 2)에서 다룬 개념을 빠르게 찾아보기 위한 **레퍼런스**입니다. 명령어의 "왜"는 본문에 있으니, 여기서는 "무엇을 어떻게"에 집중합니다. 모든 명령은 `cargo 1.96.0`, `rustup 1.28.2` 기준으로 실제 동작을 확인했습니다. 파이썬 대응은 의미상 가장 가까운 도구를 적었으며, 1:1로 완벽히 같지는 않다는 점을 감안하세요.
+이 부록은 본문(특히 Chapter 2)에서 다룬 개념을 빠르게 찾아보기 위한 **레퍼런스**입니다. 명령어의 "왜"는 본문에 있으니, 여기서는 "무엇을 어떻게"에 집중합니다. 표의 플래그 의미는 `cargo 1.96.0`, `rustup 1.28.2`에서 대조한 레퍼런스입니다. 그 가운데 `cargo new`의 기본 에디션만 2026-10-22에 cargo 1.99.1로 다시 확인했고, 생성된 `Cargo.toml`은 `edition = "2024"`입니다. rustup 도구 자체는 1.29.2입니다. 표의 나머지 명령을 1.99.1에서 한 줄씩 다시 실행한 것은 아닙니다. 파이썬 대응은 의미상 가장 가까운 도구를 적었으며, 1:1로 완벽히 같지는 않다는 점을 감안하세요.
 
 ---
 
@@ -10,7 +10,7 @@
 
 | 명령 | 설명 | 자주 쓰는 플래그 | Python 대응 |
 | :--- | :--- | :--- | :--- |
-| `cargo new <name>` | 새 패키지 디렉터리를 스캐폴딩 | `--lib`(라이브러리), `--bin`(기본, 실행 파일), `--edition 2021`, `--vcs git` | `poetry new`, `django-admin startproject` |
+| `cargo new <name>` | 새 패키지 디렉터리를 스캐폴딩 | `--lib`(라이브러리), `--bin`(기본, 실행 파일), `--edition 2024`(생략해도 현재 stable이 이 값을 씀), `--vcs git` | `poetry new`, `django-admin startproject` |
 | `cargo init` | **기존** 디렉터리를 패키지로 초기화 | `--lib`, `--bin`, `--name <n>` | `poetry init`, `pip init`(개념상) |
 | `cargo build` | 컴파일만 수행, 산출물 생성 | `--release`, `--target <triple>`, `--all-features`, `-p <pkg>`, `--timings` | (없음 — 파이썬은 빌드 단계 없음) |
 | `cargo run` | 빌드 후 바이너리 실행 | `--release`, `--bin <n>`, `--example <n>`, `-- <args>` | `python main.py` |
@@ -70,7 +70,7 @@ $ cargo tree -i serde
 [package]
 name = "my_app"              # 크레이트 이름 (필수)
 version = "0.1.0"            # SemVer (필수)
-edition = "2021"            # 언어 에디션: 2015/2018/2021/2024
+edition = "2024"            # 언어 에디션. cargo new 기본값(cargo 1.99.1). 이 책 예제는 "2021"
 rust-version = "1.74"       # MSRV: 이 버전 미만이면 빌드 거부
 authors = ["Heechan <h@e.io>"]
 description = "..."         # crates.io 게시 시 필수
@@ -182,7 +182,7 @@ serde = { version = "1.0", features = ["derive"] }
 
 [workspace.package]             # 멤버가 version.workspace = true 등으로 상속
 version = "0.1.0"
-edition = "2021"
+edition = "2021"             # 이 책의 예제 에디션. 새 프로젝트의 cargo new는 "2024"
 ```
 
 ```toml
@@ -318,7 +318,7 @@ $ cargo expand --bin cli            # #[derive(...)] 펼쳐보기
 | `rustup show` | 활성/설치된 툴체인·타깃 표시 | `pyenv versions` |
 | `rustup check` | 갱신 가능 여부만 확인 | — |
 | `rustup default <toolchain>` | 시스템 기본 툴체인 설정 | `pyenv global` |
-| `rustup toolchain install <ch>` | 채널/버전 설치(`stable`, `nightly`, `1.96.0`) | `pyenv install` |
+| `rustup toolchain install <ch>` | 채널/버전 설치(`stable`, `nightly`, `1.99.1`) | `pyenv install` |
 | `rustup toolchain list` | 설치된 툴체인 목록 | `pyenv versions` |
 | `rustup toolchain uninstall <ch>` | 툴체인 제거 | `pyenv uninstall` |
 | `rustup override set <ch>` | 현재 디렉터리에 툴체인 고정 | `pyenv local` |
@@ -340,7 +340,7 @@ $ rustup target add x86_64-unknown-linux-musl   # 정적 리눅스 바이너리�
 $ cargo +nightly build                           # 일회성 nightly 사용 (+toolchain 문법)
 ```
 
-> 💡 `+toolchain` 문법(`cargo +nightly ...`, `rustc +1.96.0 ...`)으로 한 명령만 다른 툴체인으로 실행할 수 있습니다. 디렉터리 단위 고정은 `rust-toolchain.toml`(Chapter 2.3)이 더 견고합니다.
+> 💡 `+toolchain` 문법(`cargo +nightly ...`, `rustc +1.99.1 ...`)으로 한 명령만 다른 툴체인으로 실행할 수 있습니다. 디렉터리 단위 고정은 `rust-toolchain.toml`(Chapter 2.3)이 더 견고합니다.
 
 ---
 

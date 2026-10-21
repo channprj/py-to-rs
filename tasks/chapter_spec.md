@@ -11,7 +11,7 @@
   - `asyncio`, `multiprocessing`, `Pydantic`, `FastAPI`, `numpy`, `pandas`를 실무에서 써봤다.
   - "Hello World"식 설명은 모욕이다. 깊이로 존중하라.
 - **핵심 컨셉**: 문법 나열이 아니라 **"Python 코드와 1:1 대응 + 내부 메모리 구조/디스패치/어셈블리 관점의 비교"**.
-- **분량 목표**: 전체 A4 ~600페이지. 챕터당 평균 8,000~11,000 단어(한국어 기준), 약 25~30페이지.
+- **분량**: 독자용 본문은 A4 약 800페이지다. 초고 목표였던 ~600페이지는 지난 자리고, 페이지 수를 맞추려고 내용을 더 늘리거나 자르지 않는다.
 
 ## 1. 목소리(Voice)와 문체
 
@@ -67,7 +67,7 @@
 
 ## 4. 코드 스타일 규칙
 
-- Rust 코드: `rustfmt` 스타일(4-space indent, snake_case). `edition = 2021` 기준.
+- Rust 코드: `rustfmt` 스타일(4-space indent, snake_case). 본문 예제는 `edition = "2021"`이다. 현재 stable의 `cargo new` 기본값은 `"2024"`다(rustc 1.99.1, 2026-10-22에서 확인). 두 값을 문장에서 구분한다.
 - 코드 블록 언어 태그 정확히: ```python / ```rust / ```toml / ```bash / ```text.
 - 주석은 한국어로, 핵심만. 코드 안에 "왜"를 설명.
 - Python 코드는 타입 힌트 포함(독자가 시니어이므로). `from __future__ import annotations` 가정 가능.

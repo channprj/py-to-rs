@@ -86,7 +86,7 @@ $ rustup component add clippy rustfmt rust-src   # 컴포넌트 추가
 
 | 채널 | 주기 | 성격 | 파이썬에 비유하면 |
 | :--- | :--- | :--- | :--- |
-| **stable** | 6주마다 | 프로덕션용. 모든 안정화된 기능. | CPython 정식 릴리스 (3.13.6) |
+| **stable** | 6주마다 | 프로덕션용. 모든 안정화된 기능. | CPython 정식 릴리스 (현재 stable 라인은 3.15, 3.14도 지원) |
 | **beta** | 6주마다 | 다음 stable의 후보. 회귀 테스트용. | 릴리스 후보(rc) |
 | **nightly** | 매일 | 실험적 기능(unstable feature) 사용 가능. | `__future__` 임포트 + 빌드 미리보기 |
 
@@ -104,7 +104,7 @@ fn main() {
 }
 ```
 
-stable 1.96.0에서 `rustc`를 돌리면 정확히 이렇게 거부합니다.
+stable 1.99.1에서 `rustc`를 돌리면 정확히 이렇게 거부합니다. 진단 문장은 2026-10-22에 다시 확인했고, 아래 출력과 같습니다.
 
 ```text
 error[E0658]: box pattern syntax is experimental
@@ -129,7 +129,7 @@ For more information about this error, try `rustc --explain E0658`.
 ```toml
 # rust-toolchain.toml
 [toolchain]
-channel = "1.96.0"                       # 정확한 버전 핀 (또는 "stable", "nightly-2026-05-01")
+channel = "1.99.1"                       # 정확한 버전 핀 (또는 "stable", "nightly-2026-05-01")
 components = ["clippy", "rustfmt"]        # 이 프로젝트에 필요한 컴포넌트
 targets = ["x86_64-unknown-linux-musl"]  # 빌드 대상 플랫폼까지 명시
 profile = "minimal"
@@ -213,7 +213,7 @@ black = "^23.3.0"
 [package]
 name = "my_rust_app"
 version = "0.1.0"
-edition = "2021"                       # 언어 에디션 (문법/관용구 버전)
+edition = "2021"                       # 이 책의 예제 에디션. cargo new 기본값은 "2024"
 authors = ["Rustacean <rust@example.com>"]
 rust-version = "1.74"                  # MSRV: 이 버전 미만에선 빌드 거부
 
@@ -233,7 +233,7 @@ cc = "1.0"                             # build.rs에서만 쓰는 의존성 (C �
 
 ### `edition` vs `rust-version` — 헷갈리기 쉬운 두 축
 
-- **`edition`** (2015/2018/2021/2024): 언어의 **문법·관용구 세대**입니다. 파이썬 2 → 3 같은 큰 단절을 막으면서도 언어를 진화시키기 위한 장치로, 같은 컴파일러가 여러 에디션을 동시에 빌드할 수 있습니다. 에디션이 달라도 크레이트끼리는 자유롭게 섞입니다.
+- **`edition`** (2015/2018/2021/2024): 언어의 **문법·관용구 세대**입니다. 파이썬 2 → 3 같은 큰 단절을 막으면서도 언어를 진화시키기 위한 장치로, 같은 컴파일러가 여러 에디션을 동시에 빌드할 수 있습니다. 에디션이 달라도 크레이트끼리는 자유롭게 섞입니다. Rust 1.85부터 `cargo new`의 기본값은 `"2024"`이고, stable 1.99.1(2026-10-22)에서 다시 확인했습니다. 이 장의 `Cargo.toml` 예시는 본문 예제와 같이 `"2021"`입니다.
 - **`rust-version`** (MSRV, Minimum Supported Rust Version): 이 크레이트를 빌드하는 데 필요한 **최소 컴파일러 버전**입니다. 파이썬의 `python = "^3.10"`에 대응합니다.
 
 ### 의존성의 세 종류
@@ -969,7 +969,7 @@ Rustlings 스타일로, 손으로 직접 풀어 보세요. 각 문항 아래 '�
 
 > **정답 스케치:** `serde`는 라이브러리(바이너리 없음)라 `cargo install`이 거부합니다. 에러 메시지: `there is nothing to install in \`serde v1.0.228\`, because it has no binaries` / `cargo install is only for installing programs, and can't be used with libraries.` 올바른 명령은 `cargo add serde --features derive`입니다. 대응: `cargo install`은 전역 CLI 도구 설치이므로 파이썬의 `pipx install`에, `cargo add`는 프로젝트 의존성 추가이므로 `poetry add`/`pip install`(프로젝트 맥락)에 해당합니다.
 
-**문제 4 — nightly 기능과 컴파일러 에러.** stable 1.96.0에서 아래 코드를 컴파일하면 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
+**문제 4 — nightly 기능과 컴파일러 에러.** stable 1.99.1에서 아래 코드를 컴파일하면 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
 
 ```rust
 fn main() {

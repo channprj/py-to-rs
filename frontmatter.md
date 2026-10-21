@@ -114,14 +114,18 @@ $ source "$HOME/.cargo/env"   # 또는 새 터미널을 엽니다
 
 ```bash
 $ rustc --version
-rustc 1.96.0 (ac68faa20 2026-05-25)
+rustc 1.99.1 (58cf8f9c3 2026-10-13)
 
 $ cargo --version
-cargo 1.96.0 (30a34c682 2026-05-25)
+cargo 1.99.1 (5f94df478 2026-08-27)
 
 $ rustup --version
-rustup 1.28.2 (e4f3ad6f8 2025-04-28)
+rustup 1.29.2 (d8c92c676 2026-10-21)
+info: This is the version for the rustup toolchain manager, not the rustc compiler.
+info: the currently active `rustc` version is `rustc 1.99.1 (58cf8f9c3 2026-10-13)`
 ```
+
+위 세 줄은 2026-10-22에 stable 채널에서 확인한 출력입니다. 6주마다 stable이 올라가므로 해시와 날짜는 달라질 수 있습니다. 채널 이름 `stable`이 맞는지만 보면 됩니다.
 
 > 💡 **Under the Hood: 채널(Channel)과 툴체인(Toolchain)**
 >
@@ -130,7 +134,7 @@ rustup 1.28.2 (e4f3ad6f8 2025-04-28)
 > ```toml
 > # rust-toolchain.toml
 > [toolchain]
-> channel = "1.96.0"
+> channel = "1.99.1"
 > components = ["rustfmt", "clippy"]
 > ```
 >
@@ -248,7 +252,7 @@ $ cargo add serde_json
 [package]
 name = "hello_rust"
 version = "0.1.0"
-edition = "2021"          # 언어 에디션. 2015/2018/2021/2024 중 선택 (이 책은 2021 기준).
+edition = "2024"          # cargo new가 쓴 값. 본문 예제는 따로 edition 2021.
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -260,7 +264,7 @@ opt-level = 3             # 기본값. 0~3 + "s"(크기 최적화). 필요 시 �
 
 > 💡 **Under the Hood: edition은 버전이 아니다**
 >
-> `edition = "2021"`을 보고 "이게 Rust 버전인가?"라고 오해하기 쉽습니다. 아닙니다. **에디션(Edition)**은 3년마다 갱신되는 언어 방언으로, 키워드나 기본 동작의 비호환 변경을 모아 적용하는 단위입니다. 핵심은 **에디션이 달라도 모든 크레이트가 함께 컴파일된다**는 것 — 2015 에디션 라이브러리를 2024 에디션 프로젝트가 그대로 의존할 수 있습니다. Python 2→3 마이그레이션이 생태계를 수년간 쪼갰던 비극이 Rust에는 구조적으로 없습니다. 이 책의 모든 예제는 가장 널리 쓰이는 안정 에디션인 2021을 기준으로 하며, 새 프로젝트라면 최신 stable 에디션을 써도 무방합니다.
+> `edition = "2024"`를 보고 "이게 Rust 버전인가?"라고 오해하기 쉽습니다. 아닙니다. **에디션(Edition)**은 3년마다 갱신되는 언어 방언으로, 키워드나 기본 동작의 비호환 변경을 모아 적용하는 단위입니다. 핵심은 **에디션이 달라도 모든 크레이트가 함께 컴파일된다**는 것 — 2015 에디션 라이브러리를 2024 에디션 프로젝트가 그대로 의존할 수 있습니다. Python 2→3 마이그레이션이 생태계를 수년간 쪼갰던 비극이 Rust에는 구조적으로 없습니다. Rust 1.85부터 `cargo new`의 기본 에디션은 2024이고, 위의 안내를 확인한 stable 1.99.1도 `edition = "2024"`를 씁니다. 본문 예제는 달리 적지 않으면 **edition 2021**입니다. 2021에서만 성립하는 수업이 있으니, 그 코드를 2024 기본값으로 옮기지 말고 적힌 에디션 그대로 컴파일하십시오. 직접 시작하는 프로젝트는 `cargo new`가 써 주는 2024를 쓰면 됩니다.
 
 ### 추천 학습 도구
 
@@ -282,7 +286,7 @@ opt-level = 3             # 기본값. 0~3 + "s"(크기 최적화). 필요 시 �
 **코드 블록.** 언어 태그로 출처를 명시합니다.
 
 - ` ```python ` — 비교 대상 Python 코드. 시니어 독자를 위해 타입 힌트를 포함하며 `from __future__ import annotations`를 가정합니다.
-- ` ```rust ` — Rust 코드. `rustfmt` 스타일(4-스페이스 들여쓰기, `snake_case`), `edition = 2021` 기준. 핵심 예제는 `fn main()`을 포함해 그대로 `cargo run` 됩니다. 발췌는 `// ...`로 표시합니다.
+- ` ```rust ` — Rust 코드. `rustfmt` 스타일(4-스페이스 들여쓰기, `snake_case`). 본문 예제는 `edition = "2021"`이고, `cargo new`가 새 프로젝트에 쓰는 기본값은 stable 1.99.1 기준 `edition = "2024"`입니다. 핵심 예제는 `fn main()`을 포함해 그대로 `cargo run` 됩니다. 발췌는 `// ...`로 표시합니다.
 - ` ```toml ` / ` ```bash ` / ` ```text ` — 각각 `Cargo.toml`, 셸 명령, 출력/다이어그램.
 
 셸 블록에서 `$`로 시작하는 줄은 **여러분이 입력하는 명령**, 그 아래 줄은 **기대 출력**입니다. 코드 주석은 한국어로, "왜"를 짧게 설명합니다. 의도적으로 컴파일에 실패하는 코드는 `// 🚨 컴파일 에러!`로, 런타임 패닉은 `// panic!`으로 명확히 표시합니다.
