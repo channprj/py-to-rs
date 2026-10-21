@@ -520,7 +520,9 @@ counts = Counter(words)
 ```rust
 use std::collections::HashMap;
 
-fn count_words(words: &[&str]) -> HashMap<&str, usize> {
+// 반환 키가 원소의 &str을 빌리므로 그 수명을 시그니처에 적는다.
+// words: &[&str]처럼 두면 슬라이스와 원소, 두 수명 중 어느 쪽인지 컴파일러가 고르지 못한다 (E0106).
+fn count_words<'a>(words: &'a [&'a str]) -> HashMap<&'a str, usize> {
     let mut counts = HashMap::new();
     for &w in words {
         // Counter의 핵심: 없으면 0으로 초기화 후 증가
@@ -532,7 +534,8 @@ fn count_words(words: &[&str]) -> HashMap<&str, usize> {
 fn main() {
     let words = ["a", "b", "a", "c", "a", "b"];
     let counts = count_words(&words);
-    println!("{counts:?}"); // {"a": 3, "b": 2, "c": 1}
+    // HashMap Debug 순서는 실행마다 다르다. 개수는 조회로 확인한다.
+    println!("a={} b={} c={}", counts["a"], counts["b"], counts["c"]); // a=3 b=2 c=1
 }
 ```
 

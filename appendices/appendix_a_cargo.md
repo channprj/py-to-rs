@@ -383,8 +383,11 @@ $ cargo +nightly build                           # 일회성 nightly 사용 (+to
 
 ```rust
 fn main() {
-    // 컴파일 타임에 값이 박힌다 — 런타임 조회 비용 없음
-    println!("v{} ({})", env!("CARGO_PKG_VERSION"), env!("GIT_HASH"));
+    // Cargo가 자동으로 넣는 값은 env!. 없으면 컴파일 에러다.
+    // GIT_HASH는 자동 변수가 아니다. build.rs가 cargo:rustc-env로 넣지 않으면
+    // env!("GIT_HASH")는 실패하고, option_env!는 None이다 (Chapter 2의 build.rs).
+    let hash = option_env!("GIT_HASH").unwrap_or("unset");
+    println!("v{} ({hash})", env!("CARGO_PKG_VERSION")); // 버전 0.1.0이면 v0.1.0 (unset)
 }
 ```
 
