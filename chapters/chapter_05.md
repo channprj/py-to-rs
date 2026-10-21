@@ -613,11 +613,16 @@ pub fn count_owned(text: &str) -> HashMap<String, usize> {
 `benches/wc.rs` (criterion harness):
 
 ```rust
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use word_count_bench::{count_borrowed, count_owned};
 
+fn make_log(n_words: usize) -> String {
+    "ERROR ".repeat(n_words)
+}
+
 fn bench(c: &mut Criterion) {
-    let log = make_log(1_000_000); // 단어 100만 개로 구성한 로그
+    let log = make_log(1_000_000); // 반복 토큰 100만 개. 아래 시간은 이 함수로 다시 재지 않았다.
     let mut g = c.benchmark_group("word_count");
     g.bench_function("borrowed_&str", |b| b.iter(|| count_borrowed(black_box(&log))));
     g.bench_function("owned_String", |b| b.iter(|| count_owned(black_box(&log))));
@@ -628,7 +633,7 @@ criterion_group!(benches, bench);
 criterion_main!(benches);
 ```
 
-`Cargo.toml`에 criterion을 `dev-dependencies`로 추가하고 `harness = false`로 벤치 타깃을 등록한 뒤 `cargo bench`를 돌린 실측 결과입니다(로컬: rustc 1.90.0, Apple Silicon, `--release`).
+`Cargo.toml`에 `criterion = "0.8"`을 `dev-dependencies`로 추가하고 `harness = false`로 벤치 타깃을 등록한 뒤 `cargo bench`를 돌린 실측 결과입니다(로컬: rustc 1.90.0, Apple Silicon, `--release`). 시간은 예전 `criterion` 0.5 하니스의 기록이고 다시 재지 않았습니다. `black_box`는 `std::hint::black_box`이고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 ```text
 word_count/borrowed_&str   time:   [12.40 ms 12.99 ms 13.26 ms]

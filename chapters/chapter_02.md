@@ -747,7 +747,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dev-dependencies]            # 벤치는 테스트처럼 dev에서만 빌드됨
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "primes"
@@ -779,8 +779,9 @@ pub fn count_primes(n: u64) -> u64 {
 
 ```rust
 // benches/primes.rs — criterion 하니스
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use prime_bench::count_primes;
+use std::hint::black_box;
 
 fn bench_count_primes(c: &mut Criterion) {
     c.bench_function("count_primes 100_000", |b| {
@@ -794,7 +795,7 @@ criterion_group!(benches, bench_count_primes);
 criterion_main!(benches);
 ```
 
-`cargo bench`를 돌리면 criterion이 워밍업 후 100개 샘플을 수집해 신뢰구간과 함께 보고합니다.
+`cargo bench`를 돌리면 criterion이 워밍업 후 100개 샘플을 수집해 신뢰구간과 함께 보고합니다. 아래 시간은 예전 `criterion` 0.5 하니스의 기록이고 다시 재지 않았습니다. 위 하니스는 `criterion` 0.8과 `std::hint::black_box`로 바꿨습니다. 0.8에서 `criterion::black_box`는 deprecated이고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 ```text
 $ cargo bench

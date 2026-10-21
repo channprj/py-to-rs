@@ -1089,7 +1089,7 @@ fn describe(e: &ApiError) -> &str {
 ```toml
 # Cargo.toml
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "dispatch"
@@ -1102,7 +1102,8 @@ lto = true
 
 ```rust
 // benches/dispatch.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 // 정적 디스패치: enum + match
 enum Shape {
@@ -1176,7 +1177,7 @@ criterion_group!(benches, bench);
 criterion_main!(benches);
 ```
 
-`cargo bench`의 측정 결과입니다 (Apple Silicon, `--release` + LTO, criterion 100 샘플의 중앙값. 직접 측정).
+`cargo bench`의 측정 결과입니다 (Apple Silicon, `--release` + LTO, criterion 100 샘플의 중앙값. 직접 측정). 시간은 예전 `criterion` 0.5 하니스의 기록이고 다시 재지 않았습니다. 위 하니스는 `criterion` 0.8과 `std::hint::black_box`로 바꿨고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 | 방식 | 컬렉션 타입 | 100만 요소 순회 시간 | 상대 비용 |
 | :--- | :--- | ---: | ---: |

@@ -935,7 +935,8 @@ _via_match:
 12.6에서 "`Result` 분기는 정수 비교, `panic!` 되감기는 비싸다"고 주장했습니다. 이제 `criterion`으로 그 격차를 측정해 수치로 못박겠습니다. 같은 "콜스택 16단계를 거슬러 올라가는 에러"를 두 방식으로 구현합니다 — 하나는 `Result`를 `?`로 전파, 하나는 `panic!`을 `catch_unwind`로 받습니다.
 
 ```rust
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 #[derive(Debug)]
 struct MyErr;
@@ -981,7 +982,7 @@ criterion_main!(benches);
 
 ```toml
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "errbench"
@@ -991,7 +992,7 @@ harness = false
 panic = "unwind"
 ```
 
-`cargo bench`의 실측 결과(Apple Silicon, rustc 1.90.0, `--release`, 콜스택 깊이 16):
+`cargo bench`의 실측 결과(Apple Silicon, rustc 1.90.0, `--release`, 콜스택 깊이 16). 시간은 예전 `criterion` 0.5 하니스의 기록이고 다시 재지 않았습니다. 위 하니스는 `criterion` 0.8과 `std::hint::black_box`로 바꿨고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 ```text
 result_err_depth16      time:   [538.25 ps 540.88 ps 543.97 ps]

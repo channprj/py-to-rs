@@ -845,12 +845,12 @@ print(f"builtin sum(): {t_builtin*1000:.1f} ms")
 print(f"explicit loop: {t_loop*1000:.1f} ms")
 ```
 
-Rust 쪽은 `criterion`으로 측정합니다. 마이크로벤치마크의 최대 적은 컴파일러의 과도한 최적화입니다. 합산 결과를 안 쓰면 LLVM이 루프 전체를 상수로 접거나(상수 폴딩) 통째로 삭제(dead code elimination)해서 "0ns"라는 거짓말이 나오기 때문입니다. `criterion`의 `black_box`로 입력을 불투명하게 감싸 이를 막습니다.
+Rust 쪽은 `criterion`으로 측정합니다. 마이크로벤치마크의 최대 적은 컴파일러의 과도한 최적화입니다. 합산 결과를 안 쓰면 LLVM이 루프 전체를 상수로 접거나(상수 폴딩) 통째로 삭제(dead code elimination)해서 "0ns"라는 거짓말이 나오기 때문입니다. `std::hint::black_box`로 입력을 불투명하게 감싸 이를 막습니다.
 
 ```toml
 # Cargo.toml
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "sum_bench"
@@ -859,7 +859,8 @@ harness = false
 
 ```rust
 // benches/sum_bench.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 fn sum_vec(v: &[i64]) -> i64 {
     let mut total = 0i64;
@@ -881,7 +882,7 @@ criterion_group!(benches, bench_sum);
 criterion_main!(benches);
 ```
 
-`cargo bench`로 측정한 실제 결과입니다(Apple Silicon, rustc 1.96.0 핀, `--release` 자동 적용).
+`cargo bench`로 측정한 실제 결과입니다(Apple Silicon, rustc 1.96.0 핀, `--release` 자동 적용). 시간은 예전 `criterion` 0.5 하니스의 기록이고 다시 재지 않았습니다. 위 하니스는 `criterion` 0.8과 `std::hint::black_box`로 바꿨고, 2026-10-22에 rustc 1.99.1로 `cargo check --benches`만 통과했습니다.
 
 ```text
 sum_10m_i64             time:   [1.864 ms 1.960 ms 2.063 ms]
