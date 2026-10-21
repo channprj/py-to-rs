@@ -637,18 +637,23 @@ fn main() {
 
 ```text
 error[E0425]: cannot find value `x` in this scope
- --> src/main.rs:7:20
+ --> src/main.rs:8:20
   |
-7 |     println!("{}", x);
+8 |     println!("{}", x);
   |                    ^ not found in this scope
   |
-help: an identifier with the same name is defined here, but is not
-      accessible due to macro hygiene
- --> src/main.rs:3:17
+help: an identifier with the same name is defined here, but is not accessible due to macro hygiene
+ --> src/main.rs:2:17
   |
-3 |     () => { let x = 5; };
+2 |     () => { let x = 5; };
   |                 ^
+...
+6 |     declare_x!();
+  |     ------------ in this macro invocation
+  = note: this error originates in the macro `declare_x` (in Nightly builds, run with -Z macro-backtrace for more info)
 ```
+
+줄 번호는 바로 위 스니펫을 rustc 1.99.1 edition 2021로 컴파일한 결과입니다.
 
 이것이 위생의 실증입니다. `declare_x!()`는 분명 `let x = 5;`를 만들었지만, 그 `x`는 매크로의 문맥에 속해 호출 측 `main`의 스코프에서는 보이지 않습니다. 컴파일러의 `help`가 정곡을 찌릅니다 — "같은 이름의 식별자가 여기 정의돼 있지만, **매크로 위생 때문에 접근할 수 없다**(not accessible due to macro hygiene)." 만약 위생이 없는 C 매크로였다면 `x`가 그대로 누출되어 `5`가 출력됐을 것이고, 운 나쁘면 호출 측의 다른 `x`를 덮어써 버그를 심었을 것입니다. Rust는 이것을 **컴파일 에러로** 잡아냅니다.
 

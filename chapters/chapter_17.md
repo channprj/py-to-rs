@@ -446,7 +446,7 @@ error[E0277]: `Rc<i32>` cannot be sent between threads safely
 7   |       thread::spawn(move || {
     |       ------------- ^------
     |       |             |
-    |  _____|_____________within this `{closure@src/main.rs:7:19: 7:26}`
+    |  _____|_____________within this `{closure@src/main.rs:7:19}`
     | |     |
     | |     required by a bound introduced by this call
 8   | |         println!("{}", data_clone);

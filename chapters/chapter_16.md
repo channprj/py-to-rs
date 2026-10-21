@@ -499,19 +499,19 @@ error[E0277]: `Rc<i32>` cannot be sent between threads safely
   7 |       thread::spawn(move || {
     |       ------------- ^------
     |       |             |
-    |  _____|_____________within this `{closure@d_send.rs:7:19: 7:26}`
+    |  _____|_____________within this `{closure@d_send.rs:7:19}`
     | |     |
     | |     required by a bound introduced by this call
   8 | |         println!("{c}");
   9 | |     }).join().unwrap();
     | |_____^ `Rc<i32>` cannot be sent between threads safely
     |
-    = help: within `{closure...}`, the trait `Send` is not implemented for `Rc<i32>`
+    = help: within `{closure@d_send.rs:7:19}`, the trait `Send` is not implemented for `Rc<i32>`
+note: required because it's used within this closure
 note: required by a bound in `spawn`
-    |
-128 |     F: Send + 'static,
-    |        ^^^^ required by this bound in `spawn`
 ```
+
+rustc 1.99.1(2026-10-22)은 `spawn` 본문의 `F: Send + 'static` 줄을 진단 안에 풀어 보이지 않습니다. 표준 라이브러리 위치를 가리키고, 클로저 타입의 전체 이름은 파일로 빠질 수 있습니다.
 
 `Rc<i32> cannot be sent between threads safely` — 닫는 메시지가 곧 진단입니다. 클로저가 `Rc`를 캡처했고, `Rc`가 `Send`가 아니므로 클로저도 `Send`가 아니며, `spawn`은 `F: Send`를 요구하므로 거부됩니다. 해결책은 스레드 안전한 원자적 참조 카운트 `Arc`(Atomic Rc)로 바꾸는 것 — 정확히 Chapter 17의 주제입니다. 파이썬이라면 이런 보호가 없습니다. free-threaded 빌드에서 같은 객체를 여러 스레드가 잡으면 런타임에야 문제가 드러나거나, 더 나쁘게는 조용히 데이터가 꼬입니다.
 
