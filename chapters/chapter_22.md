@@ -337,7 +337,7 @@ fn describe(obj: &Bound<'_, PyAny>) -> PyResult<String> {
     } else if let Ok(s) = obj.extract::<String>() {  // 문자열로 추출 시도
         Ok(format!("문자열 길이 {}", s.len()))
     } else if obj.is_instance_of::<PyList>() {       // list 인지 검사
-        let list = obj.downcast::<PyList>()?;
+        let list = obj.cast::<PyList>()?;            // PyO3 0.30. 예전 downcast는 없다
         Ok(format!("리스트 원소 {}개", list.len()))
     } else {
         Ok(format!("알 수 없는 타입: {}", obj.get_type().name()?))
@@ -364,7 +364,7 @@ print(fast_agg.describe([1, 2, 3]))        # 리스트 원소 3개
 print(fast_agg.apply_twice(lambda x: x + 10, 5))  # 25
 ```
 
-`obj.extract::<T>()`는 `FromPyObject`를 호출해 "이 객체를 T로 변환할 수 있나?"를 시도하고, 실패하면 `Err`를 줍니다. 파이썬의 덕 타이핑을 Rust에서 흉내 내는 표준 패턴입니다. `call1((args,))`은 파이썬 함수 호출 규약(위치 인자 튜플)을 Rust 튜플로 표현한 것이며, 이때 인자 변환과 GIL 보유 검증이 모두 타입 수준에서 처리됩니다.
+`obj.extract::<T>()`는 `FromPyObject`를 호출해 "이 객체를 T로 변환할 수 있나?"를 시도하고, 실패하면 `Err`를 줍니다. 파이썬의 덕 타이핑을 Rust에서 흉내 내는 표준 패턴입니다. 리스트처럼 구체 타입으로 좁힐 때는 `cast`를 씁니다. PyO3 0.30에는 예전 `downcast`가 없습니다. `call1((args,))`은 파이썬 함수 호출 규약(위치 인자 튜플)을 Rust 튜플로 표현한 것이며, 이때 인자 변환과 GIL 보유 검증이 모두 타입 수준에서 처리됩니다.
 
 > **Under the Hood — `Bound<'py, T>`와 `Py<T>`의 차이, 그리고 C-API 래핑**
 >
