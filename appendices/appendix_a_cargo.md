@@ -120,7 +120,7 @@ serde = { workspace = true }
 
 ```toml
 [dev-dependencies]              # 테스트·예제·벤치에만. 최종 바이너리에 미포함
-criterion = "0.5"
+criterion = "0.8"               # black_box는 std::hint::black_box
 proptest = "1"
 
 [build-dependencies]            # build.rs 컴파일에만 쓰임
@@ -173,7 +173,7 @@ opt-level = 3
 ```toml
 # 워크스페이스 루트 Cargo.toml
 [workspace]
-resolver = "2"                  # feature 해석 알고리즘 v2 (edition 2021+ 권장)
+resolver = "2"                  # edition 2021 패키지 기본값. 가상 워크스페이스는 생략하면 1. 2024 패키지 기본은 3. 명시한 2도 동작
 members = ["apps/*", "libs/*"]
 exclude = ["legacy/old_crate"]
 

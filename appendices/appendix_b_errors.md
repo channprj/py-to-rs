@@ -611,7 +611,7 @@ fn main() {
 
 > 트레이트 메서드가 "없다"고 나오면 십중팔구 `use`가 빠진 것입니다. 예: `read_line`엔 `use std::io::BufRead;`, `rayon`의 `.par_iter()`엔 `use rayon::prelude::*;`가 필요합니다.
 
-### E0428 / E0412 — 중복 정의 & 타입을 찾을 수 없음
+### E0428 / E0425 — 중복 정의 & 타입을 찾을 수 없음
 
 **E0428 (중복 정의)**
 
@@ -644,17 +644,17 @@ struct User { id: u32, name: String }   // 하나로 합치거나
 fn main() { let _ = User { id: 1, name: String::from("a") }; }
 ```
 
-**E0412 (타입을 찾을 수 없음)** — 선언/임포트하지 않은 타입명을 시그니처 등에 썼을 때입니다.
+**E0425 (예전 코드 E0412, 타입을 찾을 수 없음)** — 선언/임포트하지 않은 타입명을 시그니처 등에 썼을 때입니다.
 
 ```text
-error[E0412]: cannot find type `Widget` in this scope
+error[E0425]: cannot find type `Widget` in this scope
  --> src/main.rs:1:18
   |
-1 | fn process(item: Widget) -> u32 { ... }
+1 | fn process(item: Widget) -> u32 { 0 }
   |                  ^^^^^^ not found in this scope
 ```
 
-> 🚨 **에러 코드 진화 주의.** 최신 `rustc`는 이 상황을 **`E0425`**로 출력하며, `rustc --explain E0412`는 "this error code is no longer emitted by the compiler"라고 알려 줍니다. 원인은 동일합니다: **타입명 오타, 정의 누락, `use` 누락.** `use crate::widget::Widget;`를 추가하거나, 제네릭이었다면 `fn process<T>(item: T)`처럼 타입 매개변수를 선언하세요.
+> 🚨 **에러 코드 진화 주의.** 위 진단은 rustc 1.99.1 edition 2021의 **`E0425`**입니다. 예전 코드 `E0412`는 더 이상 나오지 않고, `rustc --explain E0412`의 첫 줄은 `#### Note: this error code is no longer emitted by the compiler.`입니다. 원인은 동일합니다: **타입명 오타, 정의 누락, `use` 누락.** `use crate::widget::Widget;`를 추가하거나, 제네릭이었다면 `fn process<T>(item: T)`처럼 타입 매개변수를 선언하세요.
 
 ---
 

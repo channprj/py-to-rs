@@ -474,7 +474,7 @@ fn main() {
 | `sorted(xs, key=f, reverse=True)` | `xs.sort_by_key(...); xs.reverse();` 또는 `sort_by` |
 | `itertools.chain(a, b)` | `a.iter().chain(b.iter())` |
 | `itertools.zip_longest` | `itertools::zip_longest` (itertools 크레이트) |
-| `itertools.groupby` | `itertools::Itertools::chunk_by` (정렬 후) |
+| `itertools.groupby` | itertools 0.15 `chunk_by` / `[T]::chunk_by` (`group_by` 없음, 인접만, 정렬 후) |
 | `itertools.islice(xs, n)` | `xs.iter().take(n)` |
 | `itertools.count()` | `(0..)` (무한 범위) |
 | `itertools.cycle(xs)` | `xs.iter().cycle()` |
