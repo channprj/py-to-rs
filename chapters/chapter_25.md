@@ -118,7 +118,7 @@ let app = Router::new()
 | `BaseModel` 검증 | `serde` `Deserialize` + `Json` 익스트랙터 | 컴파일 타임 코드 생성 |
 | `-w 8` 워커 프로세스 | 단일 프로세스 멀티스레드 `tokio` | 런타임(스케줄러) |
 
-> 이 챕터의 코드는 **axum 0.8** 기준입니다(검증 환경: rustc 1.90.0, 책 전체 핀 표기 Rust 1.96.0, 에디션 2021). axum 0.7과 0.8 사이에 경로 변수 문법이 `/:id`에서 `/{id}`로 바뀌었고, 커스텀 익스트랙터에서 `#[async_trait]`가 더는 필요 없어졌습니다(트레이트 안의 `async fn`을 언어가 직접 지원). 0.7 코드를 보고 있다면 이 두 가지를 먼저 의심하세요.
+> 이 챕터의 코드는 **axum 0.8** 기준입니다. 25.8의 서버와 통합 테스트는 2026-10-22에 rustc 1.99.1, axum 0.8.9, tokio 1.54.0, edition 2021에서 `cargo test`가 통과했습니다. 처음 검증 기록은 rustc 1.90.0입니다. axum 0.7과 0.8 사이에 경로 변수 문법이 `/:id`에서 `/{id}`로 바뀌었고, 커스텀 익스트랙터에서 `#[async_trait]`가 더는 필요 없어졌습니다(트레이트 안의 `async fn`을 언어가 직접 지원). 0.7 코드를 보고 있다면 이 두 가지를 먼저 의심하세요.
 
 ---
 
@@ -452,7 +452,7 @@ async fn main() {
 ```toml
 [dependencies]
 axum = "0.8"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["full"] }  # 2026-10-22에 1.54.0으로 풀림
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tower-http = { version = "0.6", features = ["trace"] }
@@ -626,7 +626,7 @@ mod tests {
 }
 ```
 
-이 테스트를 `cargo test`로 돌리면 통과합니다(검증 환경: rustc 1.90.0, axum 0.8.9). `Aggregate`에 `Deserialize`를 추가한 이유가 여기 있습니다 — 클라이언트가 응답 JSON을 다시 `Aggregate`로 역직렬화하기 때문입니다. 같은 serde 모델이 서버에서는 직렬화에, 테스트 클라이언트에서는 역직렬화에 쓰이는, Chapter 7 serde 설계의 양방향성이 그대로 살아납니다.
+이 테스트를 `cargo test`로 돌리면 통과합니다. 2026-10-22에 rustc 1.99.1, axum 0.8.9, tokio 1.54.0에서 다시 통과했습니다. 처음 검증은 rustc 1.90.0이었습니다. `Aggregate`에 `Deserialize`를 추가한 이유가 여기 있습니다 — 클라이언트가 응답 JSON을 다시 `Aggregate`로 역직렬화하기 때문입니다. 같은 serde 모델이 서버에서는 직렬화에, 테스트 클라이언트에서는 역직렬화에 쓰이는, Chapter 7 serde 설계의 양방향성이 그대로 살아납니다.
 
 > **🚨 No Free Lunch — 인메모리 상태의 수명**
 >
@@ -759,7 +759,7 @@ FastAPI 핸들러는 그냥 `async def` 함수라 테스트에서 직접 `await`
 
 지금까지 FastAPI의 웹 계층을 Axum으로 옮기며, 핸들러(`async fn`)·라우터(`Router`)·익스트랙터(`FromRequest`/`FromRequestParts`)·에러 응답(`IntoResponse`)·미들웨어(tower 레이어)가 어떻게 컴파일 타임 트레이트로 구현되는지 내부까지 파고들었습니다. Chapter 7의 serde 모델, Chapter 13의 에러 설계, Chapter 17의 `Arc` 공유 상태, Chapter 18의 `tokio`와 비동기 락, Chapter 22의 집계 서비스가 하나의 REST API로 합류했습니다. 핵심은 "더 빠르다"가 아니라, **워커 프로세스 복제 없이 단일 프로세스로 멀티코어와 인메모리 공유 상태를 동시에 누리면서, 웹 계층의 계약 위반을 컴파일러가 막아준다**는 것입니다.
 
-웹 서비스가 갖춰졌으니, 다음은 그것을 프로덕션에 안전하게 내보내는 일입니다. 데이터베이스 연동(`sqlx`의 컴파일 타임 쿼리 검증), 설정·관측(로깅·메트릭·트레이싱), 그리고 정적 바이너리로 빌드해 컨테이너에 담는 배포까지 — Part 9의 다음 챕터에서 이 서비스를 진짜 운영 환경으로 데려갑니다.
+웹 서비스가 갖춰졌으니, 다음은 그 서비스가 시간을 어디서 쓰는지 재는 일입니다. 다음 [Chapter 26](./chapter_26.md)에서는 프로파일링, `criterion`, 그리고 SIMD까지, 빨라졌다는 주장을 측정으로 확인하는 방법을 다룹니다.
 
 ---
 

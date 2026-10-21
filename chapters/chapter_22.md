@@ -6,7 +6,7 @@
 
 진짜 병목은 항상 좁은 구간에 숨어 있습니다. 수백만 행의 로그를 파싱하는 루프, JSON을 검증하는 핫패스, 토큰을 자르는 전처리, 수치를 집계하는 집합 연산. 프로파일러를 돌리면 전체 시간의 80%가 코드의 5%에서 소모되고 있음을 발견하게 됩니다. 그 5%만 도려내서 Rust로 교체하고, 나머지 95%는 파이썬 그대로 두는 것 — 이것이 이 챕터의 전부이자, 현대 파이썬 고성능 라이브러리들이 모두 채택한 전략입니다. `pydantic-core`(검증), `polars`(데이터프레임), `tokenizers`(HuggingFace 전처리), `ruff`(린터), `cryptography`(암호), `orjson`(JSON) — 이 라이브러리들의 공통점은 단 하나입니다. **파이썬 API를 입은 Rust 엔진**이라는 것.
 
-이번 챕터에서는 그 엔진을 만들어주는 도구 **PyO3**와 빌드 시스템 **maturin**을 다룹니다. 단순히 "함수를 노출하는 법"에 그치지 않고, PyO3가 Chapter 21에서 본 `unsafe` C-API 위에 어떻게 안전한 래퍼를 씌우는지, `py.allow_threads()`가 GIL을 풀었을 때 실제로 멀티코어가 어떻게 돌아가는지, numpy 버퍼를 제로카피(Zero-copy)로 빌려오는 비용이 얼마인지까지 내부로 파고듭니다. 그리고 이 책의 마지막 챕터인 만큼, 마지막 절에서는 여러분이 다음에 무엇을 할지 — 추천 학습 경로와 실전 적용 전략 — 으로 책 전체를 마무리하겠습니다.
+이번 챕터에서는 그 엔진을 만들어주는 도구 **PyO3**와 빌드 시스템 **maturin**을 다룹니다. 단순히 "함수를 노출하는 법"에 그치지 않고, PyO3가 Chapter 21에서 본 `unsafe` C-API 위에 어떻게 안전한 래퍼를 씌우는지, `py.detach()`가 GIL을 풀었을 때 실제로 멀티코어가 어떻게 돌아가는지, numpy 버퍼를 제로카피(Zero-copy)로 빌려오는 비용이 얼마인지까지 내부로 파고듭니다. 마지막 절에서는 핫스팟만 골라 옮기는 적용 전략을 정리합니다. 그 다음 Chapter 23부터는 테스트, CLI, 웹 서비스, 성능 측정으로 이어집니다.
 
 ---
 
@@ -81,7 +81,7 @@ Chapter 21에서 우리는 Rust 생태계의 핵심 패턴을 배웠습니다. �
 | GIL 보유 상태 | `Python<'py>` 토큰 | 수명으로 검증 |
 | `list` / `dict` / `str` | `Vec<T>` / `HashMap` / `String` | 자동 변환(복사) |
 | `numpy.ndarray` | `PyReadonlyArray1<f64>` | 제로카피 가능(`numpy` 크레이트) |
-| `threading` (GIL에 묶임) | `py.allow_threads()` + `rayon` | 진짜 멀티코어 |
+| `threading` (GIL에 묶임) | `py.detach()` + `rayon` | 진짜 멀티코어 |
 | `setup.py` / `pip wheel` | `maturin` + `pyproject.toml` | wheel 빌드/배포 |
 
 > **Under the Hood — `Python<'py>` 토큰은 어떻게 GIL을 컴파일 타임에 검증하는가**
@@ -120,9 +120,9 @@ crate-type = ["cdylib"]
 [dependencies]
 # extension-module 피처: 파이썬 인터프리터 심볼을 빌드 시점에 링크하지 않고
 # 런타임에 호스트 인터프리터에서 해결하도록 합니다(manylinux 휠 배포의 핵심).
-pyo3 = { version = "0.22", features = ["extension-module"] }
-rayon = "1.10"                 # 22.5의 데이터 병렬 처리
-numpy = "0.22"                 # 22.7의 제로카피 numpy 연동
+pyo3 = { version = "0.30", features = ["extension-module"] }
+rayon = "1.10"                 # 22.5의 데이터 병렬. 1.12로 풀려 rustc 1.99.1에서 빌드됨
+numpy = "0.30"                 # 22.7. pyo3 0.30.1과 함께 rustc 1.99.1, CPython 3.13.6에서 cargo check
 ```
 
 `pyproject.toml`은 빌드 백엔드를 maturin으로 지정합니다.
@@ -134,7 +134,7 @@ build-backend = "maturin"
 
 [project]
 name = "fast_agg"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 classifiers = ["Programming Language :: Rust"]
 
 [tool.maturin]
@@ -155,7 +155,7 @@ $ maturin build --release
 
 > **manylinux와 abi3 — wheel 배포의 두 가지 호환성 축**
 >
-> 파이썬 네이티브 모듈을 PyPI에 올려 `pip install`로 누구나 쓰게 하려면 두 가지 호환성 벽을 넘어야 합니다. 첫째는 **OS/libc 호환**입니다. 특정 리눅스에서 빌드한 `.so`는 다른 배포판의 glibc 버전과 충돌할 수 있습니다. 해결책이 `manylinux` 표준(오래된 공통 glibc 기반의 도커 이미지에서 빌드)이며, maturin은 `--manylinux` 옵션이나 `maturin-action` GitHub Action으로 이를 자동화합니다. 둘째는 **파이썬 버전 호환**입니다. 기본적으로는 3.9, 3.10, 3.11마다 따로 빌드해야 하지만, `abi3` 피처(`pyo3 = { features = ["abi3-py38"] }`)를 켜면 안정 ABI(Stable ABI)만 사용해 **하나의 wheel이 3.8 이상 모든 버전에서 동작**합니다. CI 매트릭스가 3×N 칸에서 1×OS 칸으로 줄어드는, 실무에서 체감이 큰 최적화입니다.
+> 파이썬 네이티브 모듈을 PyPI에 올려 `pip install`로 누구나 쓰게 하려면 두 가지 호환성 벽을 넘어야 합니다. 첫째는 **OS/libc 호환**입니다. 특정 리눅스에서 빌드한 `.so`는 다른 배포판의 glibc 버전과 충돌할 수 있습니다. 해결책이 `manylinux` 표준(오래된 공통 glibc 기반의 도커 이미지에서 빌드)이며, maturin은 `--manylinux` 옵션이나 `maturin-action` GitHub Action으로 이를 자동화합니다. 둘째는 **파이썬 버전 호환**입니다. abi3를 끄면 지원하는 마이너 버전마다 wheel을 따로 만들어야 합니다. PyO3 0.30의 예시는 `pyo3 = { features = ["abi3-py312"] }`입니다. 안정 ABI만 쓰므로 **하나의 wheel이 기본(GIL) 인터프리터 3.12 이상에서 동작**합니다. `abi3-py38` 피처는 0.30에 없습니다. 3.8과 3.9는 지원이 끝났습니다. 아직 3.10이나 3.11을 배포한다면 `abi3-py310` 또는 `abi3-py311`로 바닥을 낮추면 됩니다. free-threaded 빌드는 별도 인터프리터라 이 wheel의 대상이 아닙니다. CI 매트릭스가 파이썬 버전 × OS에서 OS 칸으로 줄어듭니다.
 
 ---
 
@@ -213,7 +213,7 @@ print(fast_agg.aggregate(lines))   # {1: 4.0, 2: 1.0}
 여기서 주목할 것이 **자동 타입 변환**입니다. 함수 시그니처에 `Vec<String>`이라고 쓰면, PyO3가 파이썬 `list[str]`를 순회하며 각 요소를 Rust `String`으로 변환해 `Vec`를 채웁니다. 반환 `HashMap<i64, f64>`는 파이썬 `dict`로 변환됩니다. 이 변환은 두 개의 트레이트가 담당합니다.
 
 - **`FromPyObject`** (파이썬 → Rust): 인자 변환. `i64`, `f64`, `String`, `bool`, `Vec<T>`, `HashMap<K, V>`, `Option<T>` 등 표준 타입에 대해 이미 구현되어 있습니다.
-- **`IntoPy<PyObject>` / `IntoPyObject`** (Rust → 파이썬): 반환값 변환.
+- **`IntoPyObject`** (Rust → 파이썬): 반환값 변환. PyO3 0.30에는 예전 `IntoPy<PyObject>` 트레이트가 없습니다.
 
 > **Under the Hood — 자동 변환은 "복사"라는 비용을 숨긴다**
 >
@@ -368,15 +368,17 @@ print(fast_agg.apply_twice(lambda x: x + 10, 5))  # 25
 
 > **Under the Hood — `Bound<'py, T>`와 `Py<T>`의 차이, 그리고 C-API 래핑**
 >
-> PyO3에는 파이썬 객체를 가리키는 두 종류의 핸들이 있습니다. `Bound<'py, T>`는 **GIL을 쥐고 있는 동안에만** 유효한 핸들로, 수명 `'py`가 GIL 보유를 증명합니다 — 그래서 `Bound`를 통해서는 추가 검사 없이 객체를 만질 수 있습니다. 반면 `Py<T>`(예: `PyObject = Py<PyAny>`)는 GIL과 무관하게 오래 보관할 수 있는 소유 핸들로, 실제 객체를 만지려면 `bound(py)`로 다시 GIL 토큰을 결합해 `Bound`로 승격해야 합니다. 내부적으로 이 두 타입은 모두 C의 `*mut PyObject` 원시 포인터를 감싼 것이고, `Drop` 시점에 `Py_DECREF`를 호출합니다. Chapter 21에서 본 "`unsafe`로 원시 호출을 한 뒤 안전한 타입으로 포장"하는 패턴이 바로 이것입니다 — `set_item`, `call1`, `extract` 같은 안전한 메서드의 본체에는 `ffi::PyDict_SetItem`, `ffi::PyObject_Call` 같은 `unsafe` C-API 호출이 들어 있고, PyO3가 그 반환값(`NULL`이면 예외 발생)을 검사해 `PyResult`로 변환해줍니다. 우리는 그 안전한 표면만 만지면 됩니다. C 확장이라면 손으로 했을 `NULL` 체크와 참조 카운팅이 전부 타입과 RAII 속으로 사라진 것입니다.
+> PyO3에는 파이썬 객체를 가리키는 두 종류의 핸들이 있습니다. `Bound<'py, T>`는 **GIL을 쥐고 있는 동안에만** 유효한 핸들로, 수명 `'py`가 GIL 보유를 증명합니다 — 그래서 `Bound`를 통해서는 추가 검사 없이 객체를 만질 수 있습니다. 반면 `Py<PyAny>`는 GIL과 무관하게 오래 보관할 수 있는 소유 핸들입니다. PyO3 0.30에는 예전 별칭 `PyObject`가 없습니다. 실제 객체를 만지려면 `bind(py)`로 다시 GIL 토큰을 결합해 `Bound`로 승격해야 합니다. 내부적으로 이 두 타입은 모두 C의 `*mut PyObject` 원시 포인터를 감싼 것이고, `Drop` 시점에 `Py_DECREF`를 호출합니다. Chapter 21에서 본 "`unsafe`로 원시 호출을 한 뒤 안전한 타입으로 포장"하는 패턴이 바로 이것입니다 — `set_item`, `call1`, `extract` 같은 안전한 메서드의 본체에는 `ffi::PyDict_SetItem`, `ffi::PyObject_Call` 같은 `unsafe` C-API 호출이 들어 있고, PyO3가 그 반환값(`NULL`이면 예외 발생)을 검사해 `PyResult`로 변환해줍니다. 우리는 그 안전한 표면만 만지면 됩니다. C 확장이라면 손으로 했을 `NULL` 체크와 참조 카운팅이 전부 타입과 RAII 속으로 사라진 것입니다.
 
 ---
 
-## 22.5 GIL을 풀고 진짜 멀티코어로 — `allow_threads` + rayon
+## 22.5 GIL을 풀고 진짜 멀티코어로 — `detach` + rayon
+
+PyO3 0.30에서 GIL을 놓는 메서드는 `py.detach()`입니다. 0.22까지의 이름은 `allow_threads`였고, 0.30에는 그 메서드가 없습니다.
 
 여기서부터가 PyO3의 진짜 마법입니다. Chapter 1과 Chapter 16에서 누누이 강조했던 GIL의 족쇄를 — 특정 구간에서 — 완전히 벗겨내는 기술입니다.
 
-핵심 통찰은 이렇습니다. **GIL은 파이썬 객체를 보호하기 위한 락입니다.** 그런데 우리가 데이터를 일단 Rust 타입(`Vec<f64>` 등)으로 변환해버리면, 그 데이터를 처리하는 동안에는 파이썬 객체를 전혀 건드리지 않습니다. 그렇다면 그동안 GIL을 쥐고 있을 이유가 없습니다. `py.allow_threads()`로 GIL을 놓아주면, (1) 다른 파이썬 스레드들이 그동안 자유롭게 돌 수 있고, (2) 더 중요하게는 **우리 Rust 코드가 여러 OS 스레드를 띄워 진짜 멀티코어 병렬 처리**를 할 수 있습니다.
+핵심 통찰은 이렇습니다. **GIL은 파이썬 객체를 보호하기 위한 락입니다.** 그런데 우리가 데이터를 일단 Rust 타입(`Vec<f64>` 등)으로 변환해버리면, 그 데이터를 처리하는 동안에는 파이썬 객체를 전혀 건드리지 않습니다. 그렇다면 그동안 GIL을 쥐고 있을 이유가 없습니다. `py.detach()`로 GIL을 놓아주면, (1) 다른 파이썬 스레드들이 그동안 자유롭게 돌 수 있고, (2) 더 중요하게는 **우리 Rust 코드가 여러 OS 스레드를 띄워 진짜 멀티코어 병렬 처리**를 할 수 있습니다.
 
 22.4의 집계를 병렬 버전으로 발전시켜 봅시다. 데이터 병렬 처리의 사실상 표준 크레이트 `rayon`(Chapter 16에서 소개)을 결합합니다.
 
@@ -390,7 +392,7 @@ use std::collections::HashMap;
 fn aggregate_parallel(py: Python<'_>, data: Vec<(i64, f64)>) -> PyResult<HashMap<i64, f64>> {
     // data 는 순수 Rust 데이터입니다. 여기서부터 파이썬 객체를 만지지 않습니다.
     // 따라서 GIL을 놓아줍니다 → 다른 파이썬 스레드도 돌고, 우리는 멀티코어를 씁니다.
-    let result = py.allow_threads(|| {
+    let result = py.detach(|| {
         data.par_iter()                       // rayon 병렬 이터레이터
             .fold(HashMap::new, |mut acc, &(id, value)| {
                 *acc.entry(id).or_insert(0.0) += value;
@@ -409,17 +411,17 @@ fn aggregate_parallel(py: Python<'_>, data: Vec<(i64, f64)>) -> PyResult<HashMap
 }
 ```
 
-`par_iter()`는 `rayon`이 CPU 코어 수만큼 워커 스레드를 띄워 데이터를 쪼개 처리합니다. `fold`로 각 스레드가 자기 부분 합계를 내고, `reduce`로 그것들을 병합합니다. 이 전체가 `py.allow_threads()` 안에서 GIL 없이 돌기 때문에 8코어 머신이라면 이론상 8배에 가까운 속도를 냅니다.
+`par_iter()`는 `rayon`이 CPU 코어 수만큼 워커 스레드를 띄워 데이터를 쪼개 처리합니다. `fold`로 각 스레드가 자기 부분 합계를 내고, `reduce`로 그것들을 병합합니다. 이 전체가 `py.detach()` 안에서 GIL 없이 돌기 때문에 8코어 머신이라면 이론상 8배에 가까운 속도를 냅니다.
 
 왜 굳이 `fold` + `reduce`라는 두 단계를 거칠까요? 가장 순진한 병렬화는 모든 스레드가 하나의 공유 `HashMap`에 `Arc<Mutex<HashMap>>`(Chapter 17)로 동시에 쓰는 것입니다. 하지만 그러면 매 원소마다 락 경합(lock contention)이 일어나, 코어를 늘려도 락 앞에 줄을 서느라 오히려 느려집니다 — 이것이 병렬 프로그래밍의 고전적 함정입니다. `fold`는 **각 스레드가 자기만의 부분 결과를 락 없이 쌓고**, 마지막에 `reduce`로 한 번만 병합합니다. 공유 가변 상태를 마지막 순간까지 미루는 이 "맵-리듀스" 패턴이 진짜 선형 확장을 만드는 비결입니다. Rust의 소유권 시스템은 이 패턴을 자연스럽게 유도합니다 — 공유하려면 `Send`/`Sync`를 증명해야 하니, 개발자가 무의식 중에 공유를 최소화하게 됩니다.
 
-> 🚨 **흔한 함정 — GIL을 안 풀고 멀티코어를 기대하기.** 만약 `py.allow_threads()` 없이 `rayon`을 그대로 돌리면 어떻게 될까요? Rust 스레드들은 뜨지만, 파이썬 함수가 GIL을 쥔 채로 있으니 — 사실 이 경우엔 파이썬 객체를 안 만지므로 동작은 합니다만 — `allow_threads`로 GIL을 명시적으로 놓아주지 않으면 **같은 인터프리터를 쓰는 다른 파이썬 스레드들이 이 함수가 끝날 때까지 전부 멈춰 섭니다.** 멀티스레드 파이썬 서버에서 이 함수 하나가 다른 모든 요청을 인질로 잡는 것입니다. "Rust로 바꿨는데 왜 동시성이 더 나빠졌지?"의 흔한 원인입니다. 순수 연산 구간은 반드시 `allow_threads`로 감싸세요.
+> 🚨 **흔한 함정 — GIL을 안 풀고 멀티코어를 기대하기.** 만약 `py.detach()` 없이 `rayon`을 그대로 돌리면 어떻게 될까요? Rust 스레드들은 뜨지만, 파이썬 함수가 GIL을 쥔 채로 있으니 — 사실 이 경우엔 파이썬 객체를 안 만지므로 동작은 합니다만 — `detach`로 GIL을 명시적으로 놓아주지 않으면 **같은 인터프리터를 쓰는 다른 파이썬 스레드들이 이 함수가 끝날 때까지 전부 멈춰 섭니다.** 멀티스레드 파이썬 서버에서 이 함수 하나가 다른 모든 요청을 인질로 잡는 것입니다. "Rust로 바꿨는데 왜 동시성이 더 나빠졌지?"의 흔한 원인입니다. 순수 연산 구간은 반드시 `detach`로 감싸세요.
 
 > **Under the Hood — GIL을 풀면 어셈블리 수준에서 무슨 일이 벌어지는가**
 >
-> `py.allow_threads(closure)`를 호출하면 PyO3는 내부적으로 C-API의 `PyEval_SaveThread()`를 부릅니다. 이 함수는 현재 스레드의 파이썬 스레드 상태를 저장하고 **전역 GIL 뮤텍스를 해제(release)**합니다. 그 순간 OS 스케줄러는 GIL을 기다리며 잠들어 있던 다른 파이썬 스레드를 깨워 다른 코어에 배치할 수 있습니다. 동시에 클로저 안의 `rayon` 워커 스레드들도 — 이들은 파이썬과 무관한 순수 OS 스레드입니다 — 각자 다른 코어에서 동시에 전진합니다. 즉 이 구간에서는 물리적으로 N개의 코어가 동시에 명령어를 인출(fetch)·실행합니다. 클로저가 반환되면 PyO3는 `PyEval_RestoreThread()`로 GIL을 다시 획득하고 스레드 상태를 복원합니다. 이 획득은 블로킹입니다 — 다른 스레드가 GIL을 쥐고 있으면 그것을 놓을 때까지 기다립니다. 그래서 `allow_threads`로 감싼 구간이 **충분히 길어야** 이득이 납니다. 1마이크로초짜리 작업을 감싸면 GIL을 놓고 다시 잡는 오버헤드가 이득을 잡아먹습니다. "병렬화할 가치가 있을 만큼 무거운 덩어리"에만 적용하는 것이 원칙입니다.
+> `py.detach(closure)`를 호출하면 PyO3는 내부적으로 C-API의 `PyEval_SaveThread()`를 부릅니다. 이 함수는 현재 스레드의 파이썬 스레드 상태를 저장하고 **전역 GIL 뮤텍스를 해제(release)**합니다. 그 순간 OS 스케줄러는 GIL을 기다리며 잠들어 있던 다른 파이썬 스레드를 깨워 다른 코어에 배치할 수 있습니다. 동시에 클로저 안의 `rayon` 워커 스레드들도 — 이들은 파이썬과 무관한 순수 OS 스레드입니다 — 각자 다른 코어에서 동시에 전진합니다. 즉 이 구간에서는 물리적으로 N개의 코어가 동시에 명령어를 인출(fetch)·실행합니다. 클로저가 반환되면 PyO3는 `PyEval_RestoreThread()`로 GIL을 다시 획득하고 스레드 상태를 복원합니다. 이 획득은 블로킹입니다 — 다른 스레드가 GIL을 쥐고 있으면 그것을 놓을 때까지 기다립니다. 그래서 `detach`로 감싼 구간이 **충분히 길어야** 이득이 납니다. 1마이크로초짜리 작업을 감싸면 GIL을 놓고 다시 잡는 오버헤드가 이득을 잡아먹습니다. "병렬화할 가치가 있을 만큼 무거운 덩어리"에만 적용하는 것이 원칙입니다.
 
-`py.allow_threads`에 넘기는 클로저는 파이썬 객체(`Python<'py>` 토큰이나 `PyObject`)를 캡처할 수 없습니다 — 캡처하면 컴파일 에러가 납니다. 이것이 22.2의 토큰 모델이 빛나는 지점입니다. "GIL을 놓은 구간에서 파이썬 객체를 만지는" 버그가 애초에 타입 시스템에서 막힙니다. 클로저가 `Send`여야 한다는 제약(Chapter 17의 `Send`/`Sync`) 덕분에, GIL 없는 구간으로 넘길 수 있는 것은 진짜 스레드 안전한 데이터뿐입니다.
+`py.detach`에 넘기는 클로저는 `Ungil`이어야 합니다. stable에서는 `Ungil`이 `Send`인 타입에 구현되어 있습니다. `Python<'py>` 토큰과 `Bound`는 GIL 토큰을 품고 있어 이 클로저에 들어갈 수 없고, 컴파일 에러가 납니다. 소유 핸들 `Py<PyAny>`는 `Send`라서 클로저에 들어갈 수 있지만, 그 객체를 만지려면 다시 `bind(py)`가 필요하고 그 토큰은 클로저 밖에 있습니다.
 
 ---
 
@@ -474,19 +476,17 @@ except ValueError as e:
 
 ### 의도된 컴파일 에러 시연
 
-PyO3 초심자가 가장 자주 만나는 컴파일 에러를 직접 보겠습니다. 파이썬 객체를 반환하려는데 GIL 토큰을 안 받은 경우입니다.
+PyO3 초심자가 가장 자주 만나는 컴파일 에러를 직접 보겠습니다. 파이썬 객체를 만들려면 GIL 토큰 `py`가 있어야 합니다.
 
 ```rust
-// 🚨 컴파일 에러! GIL 토큰 없이 파이썬 객체를 만들려 함
+// 🚨 컴파일 에러. py가 스코프에 없음
 #[pyfunction]
-fn make_list() -> PyObject {
-    let py: Python = todo!();           // GIL 토큰을 어디서도 얻지 못함
-    let list = pyo3::types::PyList::new(py, [1, 2, 3]);
-    list.into()
+fn make_list() -> Py<PyAny> {
+    pyo3::types::PyList::new(py, [1, 2, 3]).unwrap().into()
 }
 ```
 
-GIL 토큰을 인자로 받지 않은 채 `Python`을 허공에서 만들려 하면, `Python::with_gil` 같은 명시적 획득 없이는 토큰을 얻을 길이 없어 코드가 성립하지 않습니다. 올바른 형태는 토큰을 인자로 받는 것입니다.
+rustc 1.99.1, PyO3 0.30.1에서 이 코드는 `error[E0425]`로 멈춥니다. 메시지는 `cannot find value py in this scope`입니다. `#[pyfunction]`에서는 토큰을 인자로 받습니다. 함수 밖에서 토큰이 필요하면 `Python::attach`를 씁니다. 0.30에서 예전 이름은 `Python::with_gil`이었습니다. `PyList::new`는 `PyResult`를 반환하므로 성공 경로는 `.unwrap()`이 필요합니다.
 
 ```rust
 // ✅ 올바른 형태: GIL 토큰을 인자로 받음
@@ -496,30 +496,26 @@ fn make_list(py: Python<'_>) -> Bound<'_, pyo3::types::PyList> {
 }
 ```
 
-또 다른 전형적 에러는 `allow_threads` 클로저 안으로 파이썬 객체를 끌고 들어가려는 경우입니다.
+또 다른 전형적 에러는 `detach` 클로저 안으로 `Bound`를 끌고 들어가는 경우입니다. 소유 핸들 `Py<PyAny>`는 `Send`라서 이 클로저에 들어갈 수 있습니다. GIL에 묶인 `Bound`는 들어갈 수 없습니다.
 
 ```rust
 #[pyfunction]
-fn bad(py: Python<'_>, obj: PyObject) -> PyResult<()> {
-    py.allow_threads(|| {
-        let _ = &obj;   // 🚨 GIL을 놓은 구간에서 파이썬 객체 캡처 시도
+fn bad(py: Python<'_>, obj: Bound<'_, PyAny>) -> PyResult<()> {
+    py.detach(|| {
+        let _ = &obj;   // 🚨 GIL을 놓은 구간에서 Bound 캡처
         Ok(())
     })
 }
 ```
 
-이때 `rustc`가 내뱉는 에러는 대략 다음과 같습니다.
+rustc 1.99.1이 내는 에러의 앞부분입니다.
 
 ```text
-error[E0277]: `Py<PyAny>` cannot be shared between threads safely
-   ...
-   = help: within this `allow_threads` closure, the trait `Send` is not
-           satisfied for `*mut pyo3::ffi::PyObject`
-note: required because it appears within the type of the captured variable `obj`
-   = note: GIL이 해제된 구간으로는 파이썬 객체를 보낼 수 없습니다
+error[E0277]: `*mut pyo3::Python<'static>` cannot be shared between threads safely
+   = help: within `pyo3::Bound<'_, pyo3::PyAny>`, the trait `Sync` is not implemented for `*mut pyo3::Python<'static>`
 ```
 
-`E0277`(트레이트 바운드 미충족)은 "이 객체는 스레드 간에 안전하게 공유할 수 없다(`Send` 불만족)"고 알려줍니다. Chapter 17의 `Send` 트레이트가 여기서도 안전망으로 작동하는 것입니다. 해결책은 `allow_threads`로 들어가기 **전에** 필요한 데이터를 Rust 타입으로 추출(복사)해두고, 클로저는 그 순수 Rust 데이터만 캡처하게 하는 것입니다. 컴파일러가 "GIL 없는 곳에서 파이썬 객체를 만지는 사고"를 빌드 단계에서 봉쇄해준 셈입니다.
+`E0277`은 클로저가 `Ungil`을 만족하지 못한다는 뜻이고, stable에서 그 조건은 `Send`입니다. Chapter 17의 `Send`가 여기서도 안전망으로 작동합니다. 해결책은 `detach`로 들어가기 **전에** 필요한 데이터를 Rust 타입으로 추출(복사)해두고, 클로저는 그 순수 Rust 데이터만 캡처하게 하는 것입니다.
 
 ---
 
@@ -546,7 +542,7 @@ def aggregate_py(lines: list[str]) -> dict[int, float]:
 
 ### 단계 3 — GIL 해제 + rayon 병렬 (22.5의 `aggregate_parallel`)
 
-파싱은 파이썬에서 미리 하거나(여기서는 단순화를 위해 Rust에서 파싱 후 병렬 집계), 더 현실적으로는 파싱까지 `par_iter`로 병렬화합니다. 핵심은 무거운 집계 구간이 `allow_threads` 아래 멀티코어로 도는 것입니다.
+파싱은 파이썬에서 미리 하거나(여기서는 단순화를 위해 Rust에서 파싱 후 병렬 집계), 더 현실적으로는 파싱까지 `par_iter`로 병렬화합니다. 핵심은 무거운 집계 구간이 `detach` 아래 멀티코어로 도는 것입니다.
 
 ### 벤치마크 실행과 결과
 
@@ -569,7 +565,7 @@ print("rust single:", timeit(fast_agg.aggregate, lines))
 # 병렬 버전은 (id, value) 튜플 입력을 받는 형태라 별도 준비
 ```
 
-대표적인 측정 결과입니다(아래 수치는 측정 환경에 따라 달라집니다 — 절대값이 아니라 배수와 경향을 보세요).
+대표적인 측정 결과입니다(아래 수치는 측정 환경에 따라 달라집니다 — 절대값이 아니라 배수와 경향을 보세요). 시간 숫자는 PyO3 0.22에서 잰 기록이고, 0.30에서 다시 재지 않았습니다.
 
 ```text
 측정 환경: 입력 1천만 줄, Apple M-시리즈 8코어, --release 빌드, PyO3 0.22
@@ -599,7 +595,7 @@ fn square_all<'py>(
     arr: PyReadonlyArray1<'py, f64>,   // numpy 배열을 "빌림" (제로카피)
 ) -> Bound<'py, PyArray1<f64>> {
     let slice = arr.as_slice().unwrap();        // &[f64] — numpy 버퍼를 직접 가리킴
-    let result: Vec<f64> = py.allow_threads(|| {
+    let result: Vec<f64> = py.detach(|| {
         use rayon::prelude::*;
         slice.par_iter().map(|x| x * x).collect()
     });
@@ -638,7 +634,7 @@ build-backend = "maturin"
 name = "fast-agg"
 version = "0.1.0"
 description = "Rust-accelerated aggregation for Python"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Rust",
@@ -646,12 +642,12 @@ classifiers = [
 ]
 
 [tool.maturin]
-features = ["pyo3/extension-module", "pyo3/abi3-py39"]
+features = ["pyo3/extension-module", "pyo3/abi3-py312"]
 module-name = "fast_agg"
 python-source = "python"
 ```
 
-`abi3-py39`는 중요한 선택입니다. 기본 PyO3 빌드는 Python 3.9, 3.10, 3.11, 3.12, 3.13마다 별도 wheel을 만들어야 합니다. `abi3`를 켜면 CPython의 안정 ABI만 사용해 하나의 wheel이 3.9 이상에서 동작합니다. 대신 일부 최신 C-API를 직접 쓰지 못하는 제약이 생깁니다. 일반적인 함수/클래스 바인딩, numpy 버퍼 처리, 에러 변환에는 충분하므로, 배포 범위가 넓은 라이브러리는 `abi3`를 기본값으로 검토하세요.
+`abi3-py312`는 중요한 선택입니다. abi3를 끄면 지원하는 마이너 버전마다 wheel을 따로 만들어야 합니다. `abi3`를 켜면 CPython의 안정 ABI만 사용해 하나의 wheel이 기본(GIL) 인터프리터 3.12 이상에서 동작합니다. 3.8과 3.9는 지원이 끝났고, PyO3 0.30에는 `abi3-py38`이 없습니다. 일부 최신 C-API를 직접 쓰지 못하는 제약이 생깁니다. 함수·클래스 바인딩, numpy 버퍼(`numpy` 0.30), 에러 변환은 rustc 1.99.1과 CPython 3.13.6에서 `cargo check`했습니다. 배포 범위가 넓은 라이브러리는 `abi3`를 기본값으로 검토하세요.
 
 ### 타입 스텁(`.pyi`)을 같이 배포하라
 
@@ -737,7 +733,7 @@ PyO3를 실무에 도입할 때의 체크리스트와, 파이썬 엔지니어가
 
 - **프로파일링이 먼저다.** `cProfile`, `py-spy`, `scalene`으로 진짜 병목(전체 시간의 80%를 먹는 5%)을 먼저 특정하세요. 측정 없이 Rust로 옮기는 것은 도박입니다.
 - **경계는 좁고 굵게.** import 경계를 자주 넘나들면 변환 비용이 누적됩니다. "한 줄씩 1,000만 번 호출"이 아니라 "리스트 전체를 한 번 넘기고 결과를 한 번 받기"로 설계하세요. FFI 호출 자체에도 고정 오버헤드가 있습니다.
-- **무거운 순수 연산은 `allow_threads`로 감싸라.** 파이썬 객체를 안 만지는 구간이라면 GIL을 놓아 다른 스레드를 살리고 멀티코어를 쓰세요.
+- **무거운 순수 연산은 `detach`로 감싸라.** 파이썬 객체를 안 만지는 구간이라면 GIL을 놓아 다른 스레드를 살리고 멀티코어를 쓰세요.
 - **대용량 수치는 제로카피로.** `numpy` 크레이트의 `PyReadonlyArray`로 복사를 피하세요. 작은 데이터는 자동 변환이 편하고 충분합니다.
 - **에러는 `?`로 전파하고 `From<MyError> for PyErr`를 한 곳에 정의.** Chapter 13의 패턴을 그대로 가져오면 함수 본문이 깨끗해집니다.
 - **`maturin develop --release`로 측정.** 디버그 빌드는 10배 이상 느립니다. 성능 이야기를 할 땐 무조건 `--release`.
@@ -746,7 +742,7 @@ PyO3를 실무에 도입할 때의 체크리스트와, 파이썬 엔지니어가
 
 ### 흔한 함정
 
-- **함정 1 — GIL을 안 풀고 멀티코어를 기대한다.** 22.5에서 본 그대로입니다. `rayon`을 써도 `allow_threads`로 감싸지 않으면 다른 파이썬 스레드를 막습니다. "Rust로 바꿨는데 서버 동시성이 더 나빠졌다"의 단골 원인입니다.
+- **함정 1 — GIL을 안 풀고 멀티코어를 기대한다.** 22.5에서 본 그대로입니다. `rayon`을 써도 `detach`로 감싸지 않으면 다른 파이썬 스레드를 막습니다. "Rust로 바꿨는데 서버 동시성이 더 나빠졌다"의 단골 원인입니다.
 - **함정 2 — 과도한 데이터 복사.** `Vec<String>`, `HashMap` 자동 변환의 편리함 뒤에는 경계에서의 대규모 `memcpy`가 숨어 있습니다(22.4.1). 80MB 배열을 `Vec`로 받으면 80MB를 복사합니다. 대용량이면 제로카피를 검토하세요.
 - **함정 3 — 너무 잘게 호출한다.** 파이썬 루프 안에서 Rust 함수를 원소마다 호출하면, 함수 본체보다 FFI 경계 왕복 오버헤드가 더 큽니다. 배치(batch)로 넘기세요.
 - **함정 4 — 디버그 빌드로 벤치마크한다.** `maturin develop`(--release 없이)로 측정하고 "2배밖에 안 빠르네"라고 실망하는 경우. 빌드 모드를 항상 확인하세요.

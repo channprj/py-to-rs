@@ -205,7 +205,7 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 
 **선택 기준 요약**: 점진적 도입의 정석 — 프로파일러로 파이썬 병목을 찾고(예: pandas 그룹 연산, 무거운 루프), 그 함수만 PyO3 + maturin으로 Rust 확장으로 만들어 `import`합니다. 호출부의 파이썬 코드는 그대로 둡니다. numpy 배열을 주고받으면 `rust-numpy`로 복사 없이 메모리를 공유합니다. 22장의 "pandas 50배 최적화" 예제가 바로 이 패턴입니다.
 
-> 💡 반대 방향(Rust에서 파이썬 호출)도 같은 `pyo3`로 가능합니다. 예를 들어 Rust 서비스에서 파이썬으로 작성된 ML 모델만 호출하고 싶을 때 `Python::with_gil`로 인터프리터를 임베드합니다. 다만 GIL이 다시 등장하므로 성능 이점은 제한적입니다 — 가능하면 "파이썬이 Rust를 호출"하는 방향을 우선하세요.
+> 💡 반대 방향(Rust에서 파이썬 호출)도 같은 `pyo3`로 가능합니다. 예를 들어 Rust 서비스에서 파이썬으로 작성된 ML 모델만 호출하고 싶을 때 `Python::attach`로 인터프리터를 임베드합니다. PyO3 0.30에서 예전 이름은 `Python::with_gil`이었습니다. 다만 GIL이 다시 등장하므로 성능 이점은 제한적입니다. 가능하면 "파이썬이 Rust를 호출"하는 방향을 우선하세요.
 
 ---
 
@@ -374,13 +374,13 @@ fn main() {
 
 ### PyO3 확장: `pyo3` + `maturin` + 선택적 `numpy`
 
-Chapter 22와 부록 E의 기본 조합입니다.
+Chapter 22와 부록 E의 기본 조합입니다. PyO3 0.30의 `abi3-py312`입니다. 3.8과 3.9는 지원이 끝났고, 0.30에는 `abi3-py38` 피처가 없습니다. 아래 `sum`은 rustc 1.99.1, CPython 3.13.6에서 `cargo check`했습니다.
 
 ```bash
 $ maturin new fast-agg --bindings pyo3
 $ cd fast-agg
 $ cargo add rayon
-$ cargo add pyo3 --features extension-module,abi3-py39
+$ cargo add pyo3 --features extension-module,abi3-py312
 # numpy 배열을 zero-copy로 받을 때만
 $ cargo add numpy
 ```
@@ -391,7 +391,7 @@ name = "fast_agg"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py312"] }
 rayon = "1"
 ```
 

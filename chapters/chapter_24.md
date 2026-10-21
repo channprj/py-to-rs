@@ -443,6 +443,8 @@ struct Cli {
 $ logcli -n 200
 error: invalid value '200' for '--number <NUMBER>': 200 is not in 1..=100
 
+For more information, try '--help'.
+
 $ logcli -n 50    # 통과: Cli { number: 50 }
 ```
 
@@ -1042,13 +1044,13 @@ fn dispatch(c: &Command) {
 `-n` 옵션을 `usize`로 받되, 1 이상 1000 이하만 허용하도록 `value_parser`를 추가하십시오. 그리고 범위를 벗어난 값을 줬을 때 (1) 종료 코드와 (2) 우리 코드의 본문이 실행되는지/안 되는지를 답하십시오.
 
 > **정답 스케치**
-> `#[arg(short, long, value_parser = clap::value_parser!(usize).range(1..=1000))]`. 범위 밖 값(`-n 2000`)을 주면 clap이 **파싱 단계에서** 거부하고 종료 코드 **2**로 끝납니다. 우리의 `cmd_top` 본문은 **실행되지 않습니다** — 검증이 인자 정의에 붙어 있어, 유효한 값만 우리 로직에 도달하기 때문입니다. 이것이 "검증을 타입/파서 경계로 끌어올린다"의 실제 효과입니다(Python에서는 파싱 후 `if`로 손수 검사해야 함).
+> `#[arg(short, long, value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=1000))]`. clap 4.6에서 `.range()`는 `value_parser!(u16)` 같은 i64 파서와 `value_parser!(u64)`에만 있습니다. `value_parser!(usize)`에는 `.range()`가 없습니다. 범위 밖 값(`-n 2000`)을 주면 clap이 **파싱 단계에서** 거부하고 종료 코드 **2**로 끝납니다. 메시지 첫 줄은 `error: invalid value '2000' for '--n <N>': 2000 is not in 1..=1000`입니다. 우리의 `cmd_top` 본문은 **실행되지 않습니다**. 검증이 인자 정의에 붙어 있어, 유효한 값만 우리 로직에 도달하기 때문입니다. rustc 1.99.1, clap 4.6.7에서 확인했습니다.
 
 ---
 
 CLI는 Rust가 Python 대비 가장 즉각적이고 논쟁의 여지 없는 우위를 보이는 영역 중 하나입니다. 단일 정적 바이너리라는 배포 모델, 15배 빠른 콜드 스타트, 그리고 무엇보다 인자 구조가 타입으로 존재해 서브커맨드 누락·경로 인코딩·검증 시점 같은 버그 클래스를 컴파일 타임에 봉쇄한다는 점 — 이 모두가 "한 번 실행되고 죽는 작은 도구"라는 CLI의 본질과 정확히 맞아떨어집니다. 그래서 여러분이 매일 쓰는 `ruff`, `uv`, `rg`, `fd`, `bat` 같은 도구들이 약속이라도 한 듯 Rust로 만들어진 것입니다([Chapter 1](./chapter_01.md)에서 본 그 수렴입니다).
 
-이번 챕터에서 우리는 [Chapter 14](./chapter_14.md)의 로그 분석기를, [Chapter 10](./chapter_10.md)의 enum 망라성과 [Chapter 12](./chapter_12.md)의 `Option`, [Chapter 13](./chapter_13.md)의 `anyhow`를 엮어 실배포 CLI로 키웠습니다. 도구는 만들었으니, 이제 그것을 어떻게 견고하게 유지하고 세상에 내보낼지가 남았습니다. 다음 [Chapter 23](./chapter_23.md)에서는 이 CLI를 포함한 Rust 코드 전반의 **테스트 전략** — 단위 테스트, 통합 테스트, 그리고 방금 맛본 `assert_cmd`까지 — 을 본격적으로 다루며, 프로덕션으로 가는 길의 다음 관문을 통과합니다.
+이번 챕터에서 우리는 [Chapter 14](./chapter_14.md)의 로그 분석기를, [Chapter 10](./chapter_10.md)의 enum 망라성과 [Chapter 12](./chapter_12.md)의 `Option`, [Chapter 13](./chapter_13.md)의 `anyhow`를 엮어 실배포 CLI로 키웠습니다. 다음 [Chapter 25](./chapter_25.md)에서는 이 집계를 FastAPI에서 Axum으로 옮겨, 핸들러와 익스트랙터를 컴파일 타임 트레이트로 고정하는 웹 서비스를 만듭니다.
 
 ---
 

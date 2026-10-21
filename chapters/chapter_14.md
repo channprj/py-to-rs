@@ -249,21 +249,21 @@ fn main() {
 
 ### 표준 라이브러리의 실제 성장 규칙
 
-"가득 차면 2배"는 절반만 맞습니다. **첫 번째** 할당량은 원소 크기에 따라 달라집니다. 표준 라이브러리의 `RawVec`은 `min_non_zero_cap`이라는 상수로 첫 할당을 결정하는데, 이를 다양한 타입으로 직접 측정하면 다음과 같습니다(rustc 1.96).
+"가득 차면 2배"는 절반만 맞습니다. **첫 번째** 할당량은 원소 크기에 따라 달라집니다. 표준 라이브러리의 `RawVec`은 `min_non_zero_cap`이라는 상수로 첫 할당을 결정합니다. 표본 값 하나를 `push`한 용량은 다음과 같습니다. `T: Default`로 쓰면 `[u8; 33]`부터 `Default`가 없어 rustc 1.99.1에서 `error[E0277]`이 납니다. 숫자는 rustc 1.96의 표와 같고, 2026-10-22에 rustc 1.99.1(`--edition 2021 -O`)로 같은 호출을 다시 재서 확인했습니다.
 
 ```rust
-fn first_cap<T: Default>() -> usize {
+fn first_cap<T>(sample: T) -> usize {
     let mut v: Vec<T> = Vec::new();
-    v.push(T::default());
+    v.push(sample);
     v.capacity()
 }
 
 fn main() {
-    println!("{}", first_cap::<u8>());        // 8
-    println!("{}", first_cap::<u16>());       // 4
-    println!("{}", first_cap::<i64>());       // 4
-    println!("{}", first_cap::<[u8; 1024]>()); // 4
-    println!("{}", first_cap::<[u8; 1025]>()); // 1
+    println!("{}", first_cap(0u8));         // 8
+    println!("{}", first_cap(0u16));        // 4
+    println!("{}", first_cap(0i64));        // 4
+    println!("{}", first_cap([0u8; 1024])); // 4
+    println!("{}", first_cap([0u8; 1025])); // 1
 }
 ```
 
