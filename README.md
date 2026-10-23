@@ -4,7 +4,7 @@
 
 10년 차 이상의 Python 백엔드/데이터/인프라 엔지니어를 위해 쓴 책입니다. `asyncio`, `multiprocessing`, `Pydantic`, `numpy`로 성능의 벽에 부딪혀 본 적이 있다면, 이 책은 그 벽 너머의 도구를 손에 쥐여 줍니다. Rust는 단순히 "빠른 언어"가 아니라 **프로그래밍에 대한 멘탈 모델의 전환**을 요구하는 언어이며, 이 책은 그 전환을 Python 개발자의 언어로 안내합니다.
 
-전 챕터는 **The Python Way → The Rust Mental Model → Rust Implementation → Under the Hood**의 흐름을 따르며, 실전 예제·벤치마크·컴파일러 에러 시연·Best Practices를 담았습니다. 실행 예제와 본문이 인용한 컴파일러 에러는 실제 `rustc` / `cargo`로 확인했습니다. 발췌(`// ...`)와 연습 문제 빈칸은 그 자체로 `cargo run` 프로그램이 아닙니다. 설치 안내의 현재 기준은 rustc/cargo 1.99.1(2026-10-22)이고, 그 컴파일러의 `cargo new`는 `edition = "2024"`를 씁니다. 본문 예제는 달리 적지 않으면 edition 2021입니다. 성능·메모리 수치는 재측정하지 않았고, 각 자리에 적힌 Rust 1.90/1.96과 CPython 3.13.6의 값입니다.
+전 챕터는 **The Python Way → The Rust Mental Model → Rust Implementation → Under the Hood**의 흐름을 따르며, 실전 예제·벤치마크·컴파일러 에러 시연·Best Practices를 담았습니다. 실행 예제와 본문이 인용한 컴파일러 에러는 실제 `rustc` / `cargo`로 확인했습니다. 발췌(`// ...`)와 연습 문제 빈칸은 그 자체로 `cargo run` 프로그램이 아닙니다. 설치 안내의 현재 기준은 rustc/cargo 1.99.1(2026-10-22)이고, 그 컴파일러의 `cargo new`는 `edition = "2024"`를 씁니다. 본문 예제는 달리 적지 않으면 edition 2021입니다. 재측정하지 않은 벤치 시간은 각 자리에 적힌 Rust 1.90/1.96과 criterion 값을 유지합니다. 이 패스에서 다시 잰 메모리·어셈블리는 CPython 3.13.6 또는 rustc 1.99.1이라고 적습니다.
 
 ---
 
@@ -12,7 +12,7 @@
 
 - **대상**: CS 기초(메모리 구조, 포인터, 동시성, 다형성, 시간복잡도)를 갖춘 시니어 Python 개발자.
 - **전제**: Python 실무 경험, 타입 힌트·데코레이터·`asyncio` 사용 경험. Rust 사전 지식은 필요 없습니다.
-- **분량**: 9부 26장 + 부록 6종, A4 약 800페이지 분량.
+- **분량**: 9부 26장 + 부록 7종, A4 약 800페이지 분량.
 
 처음 시작한다면 **[서문과 시작하기 (frontmatter.md)](./frontmatter.md)** 부터 읽으세요. 집필 의도, 읽는 법, 개발 환경 설정 가이드가 담겨 있습니다.
 
@@ -87,6 +87,7 @@
 - [부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)
 - [부록 E. Python → Rust 마이그레이션 플레이북](./appendices/appendix_e_migration.md)
 - [부록 F. 용어집 (Glossary)](./appendices/appendix_f_glossary.md)
+- [부록 G. 바로 베끼는 예제와 디자인 패턴](./appendices/appendix_g_patterns.md)
 
 ---
 
@@ -115,13 +116,14 @@ py-to-rs/
 │   ├── chapter_01.md
 │   ├── ...
 │   └── chapter_26.md
-└── appendices/               # 부록 6종 (레퍼런스)
+└── appendices/               # 부록 7종 (레퍼런스)
     ├── appendix_a_cargo.md
     ├── appendix_b_errors.md
     ├── appendix_c_cheatsheet.md
     ├── appendix_d_crates.md
     ├── appendix_e_migration.md
-    └── appendix_f_glossary.md
+    ├── appendix_f_glossary.md
+    └── appendix_g_patterns.md
 ```
 
 ---
