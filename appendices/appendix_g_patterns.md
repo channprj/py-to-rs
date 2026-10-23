@@ -6,7 +6,7 @@
 rustc --edition 2021 example.rs && ./example
 ```
 
-아래 시나리오 여섯은 서로 다른 교훈입니다. 결제 상태 기계, `Vector2D`, 제로카피 설정 파서, 상한이 있는 워커 큐, HTTP 크롤러, 센서 로그 집계, `clap` CLI, Axum 서비스는 이미 본문에 있으므로 여기서 다시 찍지 않습니다. 패턴 다섯은 이름과 권장 형태가 있고, 파이썬에서 그 형태로 손이 가는 지점을 옆에 적었습니다.
+G.1의 여섯 시나리오는 서로 다른 교훈입니다. G.3은 같은 규칙으로 고른 짧은 실무 장면입니다. 결제 상태 기계, `Vector2D`, 제로카피 설정 파서, 상한이 있는 워커 큐, HTTP 크롤러, 센서 로그 집계, `clap` CLI, Axum 서비스는 이미 본문에 있으므로 여기서 다시 찍지 않습니다. G.2와 G.4는 이름과 권장 형태가 있고, 파이썬에서 그 형태로 손이 가는 지점을 옆에 적었습니다.
 
 | 절 | 알아볼 일 | 영역 |
 |----|-----------|------|
@@ -17,6 +17,13 @@ rustc --edition 2021 example.rs && ./example
 | G.1.5 | 표로 돌리는 슬러그 검사 | 테스트 |
 | G.1.6 | 짝이 맞는 로그만 만드는 매크로 | 매크로 |
 | G.2 | 뉴타입, 타입스테이트, 빌더, 전략, RAII | 패턴 참조 |
+| G.3.1 | 이모지가 낀 미리보기를 문자로 자르기 | 문자열 |
+| G.3.2 | 자판기 거스름을 큰 동전부터 나누기 | 계산 |
+| G.3.3 | 같은 멱등 키는 한 번만 반영하기 | 컬렉션 |
+| G.3.4 | 연속 실패 세 번이면 호출을 거절하기 | 상태 |
+| G.3.5 | 점수와 이름을 묶어 순위 매기기 | 이터레이터 |
+| G.3.6 | 버전을 문자열이 아니라 숫자로 비교하기 | 데이터 모델링 |
+| G.4 | 확장 트레이트, 커맨드, 데코레이터, 어댑터, TryFrom | 패턴 참조 |
 
 ---
 
@@ -528,6 +535,450 @@ leave outer
 
 ---
 
+## G.3 바로 마주치는 장면
+
+G.1과 교훈이 겹치지 않는 짧은 프로그램입니다. 표준 라이브러리만 쓰고, 각각 `fn main`이 있습니다.
+
+### G.3.1 미리보기는 바이트 칸이 아니라 문자로 자릅니다
+
+파이썬 `text[:4]`는 코드 포인트를 셉니다. 러스트 `&text[..4]`는 바이트 칸입니다. `러` 한 글자가 3바이트라, 4바이트에서 자르면 문자 경계가 아니라 패닉입니다. 권장 형태는 `chars().take(n)`입니다. 입력은 `러스트🦀파이썬`의 앞 4글자입니다. 출력은 `prefix=러스트🦀 chars=4 bytes=13`입니다.
+
+```python
+def preview(text: str, n: int) -> str:
+    return text[:n]
+```
+
+```rust
+fn preview(text: &str, n: usize) -> String {
+    text.chars().take(n).collect()
+}
+
+fn main() {
+    let text = "러스트🦀파이썬";
+    let head = preview(text, 4);
+    let chars = head.chars().count();
+    let bytes = head.len();
+    println!("prefix={head} chars={chars} bytes={bytes}");
+}
+```
+
+```text
+prefix=러스트🦀 chars=4 bytes=13
+```
+
+`chars`는 4이고 `bytes`는 13입니다. 게 이모지 하나가 4바이트를 차지합니다. 바이트 길이로 제목을 자르는 습관은 [Chapter 14](../chapters/chapter_14.md)의 문자열 인덱싱과 같은 함정입니다.
+
+### G.3.2 거스름은 큰 동전부터 나눕니다
+
+자판기에 1300원을 넣고 2000원을 냈습니다. 거스름 700원을 500원, 100원, 50원, 10원 순서로 나눕니다. 파이썬 `//`와 러스트 정수 나눗셈은 같은 방향으로 버립니다. 입력은 가격 1300과 지불 2000입니다. 출력은 `500x1,100x2`입니다.
+
+```python
+def change(due: int) -> str:
+    parts: list[str] = []
+    for coin in (500, 100, 50, 10):
+        count, due = divmod(due, coin)
+        if count:
+            parts.append(f"{coin}x{count}")
+    return ",".join(parts)
+```
+
+```rust
+fn change(price: u32, paid: u32) -> String {
+    let mut due = paid - price;
+    let mut parts = Vec::new();
+    for coin in [500, 100, 50, 10] {
+        let count = due / coin;
+        if count > 0 {
+            parts.push(format!("{coin}x{count}"));
+            due -= count * coin;
+        }
+    }
+    parts.join(",")
+}
+
+fn main() {
+    println!("{}", change(1_300, 2_000));
+}
+```
+
+```text
+500x1,100x2
+```
+
+이 입력은 50원과 10원 칸이 0이라 출력에 나오지 않습니다. 동전이 액면가를 나누지 못하면 나머지가 남습니다. 그 경우는 이 프로그램이 다루지 않습니다. 잔액 타입 자체는 G.1.1의 `Won`이고, 여기서의 교훈은 나누는 순서입니다.
+
+### G.3.3 같은 멱등 키는 두 번째 금액을 버립니다
+
+파이썬 API에서 `Idempotency-Key`를 딕셔너리에 넣어 재시도를 막는 패턴입니다. 같은 키의 두 번째 호출은 저장해 둔 금액을 돌려주고, 새로 들어온 금액은 반영하지 않습니다. 입력은 `pay-1`에 10, 다시 `pay-1`에 99, 이어서 `pay-2`에 3입니다. 출력은 세 줄입니다.
+
+```python
+def apply(done: dict[str, int], key: str, amount: int) -> tuple[str, int]:
+    if key in done:
+        return ("replay", done[key])
+    done[key] = amount
+    return ("applied", amount)
+```
+
+```rust
+use std::collections::HashMap;
+
+struct Ledger {
+    done: HashMap<String, u32>,
+}
+
+impl Ledger {
+    fn apply(&mut self, key: &str, amount: u32) -> (&'static str, u32) {
+        if let Some(saved) = self.done.get(key) {
+            return ("replay", *saved);
+        }
+        self.done.insert(key.to_string(), amount);
+        ("applied", amount)
+    }
+}
+
+fn main() {
+    let mut ledger = Ledger {
+        done: HashMap::new(),
+    };
+    for (key, amount) in [("pay-1", 10), ("pay-1", 99), ("pay-2", 3)] {
+        let (kind, value) = ledger.apply(key, amount);
+        println!("{kind} {key}={value}");
+    }
+}
+```
+
+```text
+applied pay-1=10
+replay pay-1=10
+applied pay-2=3
+```
+
+두 번째 `pay-1`의 99는 장부에 들어가지 않습니다. 이 `HashMap`은 프로세스가 끝나면 사라집니다. 요청 사이까지 지키려면 저장소를 밖에 둡니다. 맵을 소유하는 구조는 [Chapter 14](../chapters/chapter_14.md)에 있습니다. G.1.3은 순서를 남기는 중복 제거이고, 여기의 교훈은 재시도가 합계를 두 번 더하지 않는 것입니다.
+
+### G.3.4 세 번 실패하면 다음 호출은 열지도 않습니다
+
+파이썬에서 실패 횟수를 인스턴스 속성에 세고, 임계값을 넘으면 함수 본문에 들어가지 않게 막는 회로 차단기입니다. 이 예제는 시계가 없습니다. 입력 네 번은 실패, 실패, 실패, 성공 시도입니다. 세 번째에서 열리고, 네 번째는 본문을 실행하지 않습니다. 출력은 네 줄입니다.
+
+```python
+class Breaker:
+    def __init__(self) -> None:
+        self.failures = 0
+        self.open = False
+
+    def call(self, ok: bool) -> str:
+        if self.open:
+            return "rejected"
+        if ok:
+            self.failures = 0
+            return "ok"
+        self.failures += 1
+        if self.failures >= 3:
+            self.open = True
+            return "opened"
+        return "fail"
+```
+
+```rust
+struct Breaker {
+    failures: u32,
+    open: bool,
+}
+
+impl Breaker {
+    fn call(&mut self, ok: bool) -> &'static str {
+        if self.open {
+            return "rejected";
+        }
+        if ok {
+            self.failures = 0;
+            "ok"
+        } else {
+            self.failures += 1;
+            if self.failures >= 3 {
+                self.open = true;
+                "opened"
+            } else {
+                "fail"
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut breaker = Breaker {
+        failures: 0,
+        open: false,
+    };
+    for ok in [false, false, false, true] {
+        println!("{}", breaker.call(ok));
+    }
+}
+```
+
+```text
+fail
+fail
+opened
+rejected
+```
+
+성공 시도가 `rejected`인 이유는 이미 열려 있기 때문입니다. 시간이 지난 뒤 한 번만 시험하는 반열림은 이 프로그램에 없습니다. 그 상태가 필요하면 타임스탬프를 필드에 더합니다. 실행 중에 세는 차단기와, 호출 자체를 타입으로 지우는 상태 기계는 다른 도구입니다. 후자는 [Chapter 10](../chapters/chapter_10.md)에 있습니다.
+
+### G.3.5 같은 점수는 이름 순으로 줄을 세웁니다
+
+파이썬 `zip` 후 `sorted`에 점수 내림차순, 이름 오름차순 키를 주는 일과 같습니다. 입력은 ada 40, lin 90, bea 90입니다. 90점 동점은 이름이 앞선 bea가 위입니다. 출력은 세 줄입니다.
+
+```python
+def board(names: list[str], scores: list[int]) -> list[tuple[str, int]]:
+    return sorted(zip(names, scores), key=lambda row: (-row[1], row[0]))
+```
+
+```rust
+fn main() {
+    let names = ["ada", "lin", "bea"];
+    let scores = [40, 90, 90];
+    let mut rows: Vec<(&str, u32)> = names.into_iter().zip(scores).collect();
+    rows.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
+    for (name, score) in rows {
+        println!("{name} {score}");
+    }
+}
+```
+
+```text
+bea 90
+lin 90
+ada 40
+```
+
+`zip`은 짧은 쪽이 끝나면 멈춥니다. 이 입력은 양쪽 길이가 같습니다. 이터레이터로 두 줄을 묶는 설명은 [Chapter 15](../chapters/chapter_15.md)에 있습니다.
+
+### G.3.6 `1.10.0`은 `1.9.0`보다 뒤입니다
+
+파이썬에서 `"1.10.0" < "1.9.0"`은 참입니다. 첫 글자 `1` 다음의 `1`이 `9`보다 앞이기 때문입니다. 버전은 문자 순서가 아니라 `(major, minor, patch)` 숫자 순서입니다. 입력은 `1.9.0`과 `1.10.0`입니다. 출력은 `1.9.0 < 1.10.0`입니다.
+
+```python
+def parse(raw: str) -> tuple[int, int, int]:
+    major, minor, patch = raw.split(".")
+    return (int(major), int(minor), int(patch))
+```
+
+```rust
+fn parse(raw: &str) -> (u32, u32, u32) {
+    let mut parts = raw.split('.');
+    let major = parts.next().unwrap().parse().unwrap();
+    let minor = parts.next().unwrap().parse().unwrap();
+    let patch = parts.next().unwrap().parse().unwrap();
+    (major, minor, patch)
+}
+
+fn main() {
+    let older = parse("1.9.0");
+    let newer = parse("1.10.0");
+    let order = if older < newer {
+        "<"
+    } else if older > newer {
+        ">"
+    } else {
+        "="
+    };
+    println!("1.9.0 {order} 1.10.0");
+}
+```
+
+```text
+1.9.0 < 1.10.0
+```
+
+사전 릴리스(`-rc.1`)와 빌드 메타데이터는 이 세 칸에 없습니다. 그 문법이 필요하면 파서를 칸 단위로 늘립니다. 세 숫자를 이름으로 묶고 싶으면 [Chapter 7](../chapters/chapter_07.md)의 구조체로 올리면 됩니다.
+
+---
+
+## G.4 이어서 베끼는 패턴
+
+G.2에 없는 이름입니다. 각 블록이 참조 구현이고, 피할 형태를 문장으로 적었습니다.
+
+| 패턴 | 파이썬에서 손이 가는 곳 | 권장 형태 |
+|------|-------------------------|-----------|
+| 확장 트레이트 | `str`에 메서드가 없어 함수로 호출 | 로컬 트레이트를 외래 타입에 구현 |
+| 커맨드 | `"add"` 문자열을 if로 분기 | 열거형 하나가 명령과 인자를 같이 담음 |
+| 데코레이터 | 호출 횟수를 세는 래퍼 | 클로저를 가진 제네릭 구조체 |
+| 어댑터 | `"9:15"`를 분으로 직접 계산 | `From`이 경계에서 구조체를 만듦 |
+| TryFrom | 0에서 100을 넘는 정수를 그대로 캐스팅 | 실패하는 변환은 `TryFrom` |
+
+### G.4.1 확장 트레이트 (Extension Trait)
+
+`"  ".strip() == ""`를 메서드처럼 쓰고 싶을 때, 파이썬은 함수를 하나 더 두거나 문자열을 상속합니다. `str`은 외래 타입이라 러스트에서 `impl str`에 메서드를 추가할 수 없습니다. 권장 형태는 로컬 트레이트를 만들어 `&str`에 구현하는 것입니다. 입력은 공백만 있는 문자열과 `"ok"`입니다. 출력은 `true`와 `false` 두 줄입니다.
+
+```rust
+trait Blank {
+    fn is_blank(self) -> bool;
+}
+
+impl Blank for &str {
+    fn is_blank(self) -> bool {
+        self.trim().is_empty()
+    }
+}
+
+fn main() {
+    println!("{}", "  ".is_blank());
+    println!("{}", "ok".is_blank());
+}
+```
+
+```text
+true
+false
+```
+
+> 💡 **Under the Hood**: `is_blank`는 `&str`에 대해 구체 함수로 단일형화됩니다. 가상 함수 테이블이 없고, 자유 함수 하나를 메서드 문법으로 부른 것과 호출 비용이 같습니다.
+
+피할 것: 메서드 하나 때문에 `struct Text(String)`을 만들고 모든 문자열을 그 안으로 넣는 것. 형식 검증이 필요한 값은 G.2.1 뉴타입이고, 술어 하나에는 확장 트레이트가 맞습니다. 트레이트 구현은 [Chapter 9](../chapters/chapter_09.md)에 있습니다.
+
+### G.4.2 커맨드 (Command)
+
+잔액을 바꾸는 요청이 문자열 `"add"` / `"sub"`로 들어오면, 철자 하나가 조용히 다른 분기를 탑니다. 권장 형태는 명령과 숫자를 한 열거형으로 받는 것입니다. 입력은 0에서 시작해 40을 더하고 15를 뺀 뒤 잔액을 찍습니다. 출력은 `balance=25`입니다. 결제 상태 기계가 아닙니다. 그쪽은 상태이고, 여기는 이미 해석된 명령입니다.
+
+```rust
+enum Command {
+    Add(i32),
+    Sub(i32),
+    Show,
+}
+
+fn apply(balance: &mut i32, command: Command) {
+    match command {
+        Command::Add(amount) => *balance += amount,
+        Command::Sub(amount) => *balance -= amount,
+        Command::Show => println!("balance={balance}"),
+    }
+}
+
+fn main() {
+    let mut balance = 0;
+    apply(&mut balance, Command::Add(40));
+    apply(&mut balance, Command::Sub(15));
+    apply(&mut balance, Command::Show);
+}
+```
+
+```text
+balance=25
+```
+
+> 💡 **Under the Hood**: `Command`는 태그 정수와 페이로드입니다. `Add`와 `Sub`만 `i32`를 붙이고 `Show`는 태그만 있습니다. 새 변형을 더하고 `match`에 팔을 빼먹으면 컴파일이 멈춥니다.
+
+피할 것: `if command == "add"`처럼 명령을 문자열로 남기는 것. 열거형으로 분기를 닫는 설명은 [Chapter 10](../chapters/chapter_10.md)에 있습니다. G.2.2 타입스테이트는 "이 메서드를 지금 호출할 수 있는가"를 타입으로 지우고, 커맨드는 이미 허용된 동작을 값으로 실어 나릅니다.
+
+### G.4.3 데코레이터 (Decorator)
+
+파이썬 `@wraps`로 호출 횟수를 세는 래퍼와 같은 자리입니다. 러스트에서 그 자리가 늘 매크로일 필요는 없습니다. 권장 형태는 클로저를 필드로 가진 제네릭 구조체입니다. 입력은 `"pong"`을 돌려주는 함수를 두 번 호출하는 것입니다. 출력은 `pong pong calls=2`입니다.
+
+```rust
+struct Counted<F> {
+    inner: F,
+    calls: u32,
+}
+
+impl<F> Counted<F>
+where
+    F: FnMut() -> &'static str,
+{
+    fn call(&mut self) -> &'static str {
+        self.calls += 1;
+        (self.inner)()
+    }
+}
+
+fn main() {
+    let mut ping = Counted {
+        inner: || "pong",
+        calls: 0,
+    };
+    let first = ping.call();
+    let second = ping.call();
+    println!("{first} {second} calls={}", ping.calls);
+}
+```
+
+```text
+pong pong calls=2
+```
+
+피할 것: 호출 횟수를 `static mut`이나 프로세스 전역에 두는 것. 횟수는 래퍼 값의 필드입니다. 코드를 생성하는 데코레이터의 자리는 [Chapter 19](../chapters/chapter_19.md)의 매크로이고, 횟수를 세는 일에는 이 구조체로 충분합니다.
+
+### G.4.4 어댑터 (Adapter, `From`)
+
+파이썬은 `"9:15".split(":")`를 호출부마다 반복합니다. 권장 형태는 경계에서 한 번 `From<&str>`로 분 단위 구조체를 만드는 것입니다. 입력은 `9:15`와 `10:00`입니다. 출력은 `span=45`입니다.
+
+```rust
+struct Clock {
+    minutes: u32,
+}
+
+impl From<&str> for Clock {
+    fn from(raw: &str) -> Self {
+        let (hour, minute) = raw.split_once(':').expect("clock");
+        let minutes =
+            hour.parse::<u32>().expect("hour") * 60 + minute.parse::<u32>().expect("minute");
+        Self { minutes }
+    }
+}
+
+fn main() {
+    let start = Clock::from("9:15");
+    let end = Clock::from("10:00");
+    println!("span={}", end.minutes - start.minutes);
+}
+```
+
+```text
+span=45
+```
+
+`From`은 실패하지 않는 변환입니다. 이 입력은 둘 다 `시:분`이라 `expect`가 패닉하지 않습니다. 피할 것: 콜론이 없는 문자열까지 `From`으로 받고 `expect`에 맡기는 것. 거절해야 하는 입력은 다음 절의 `TryFrom`입니다. 변환 트레이트는 [Chapter 9](../chapters/chapter_09.md)에 있습니다.
+
+### G.4.5 범위 관문 (`TryFrom`)
+
+파이썬 `percent: int`는 150도 받습니다. `as u8`은 범위를 검사하지 않고 비트를 자릅니다. 권장 형태는 `TryFrom<u16>`에서 100을 넘는 값을 `Err`로 돌리는 것입니다. 입력은 15와 150입니다. 출력은 `rate=15`와 `out of range` 두 줄입니다.
+
+```rust
+struct Percent(u8);
+
+impl TryFrom<u16> for Percent {
+    type Error = &'static str;
+
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
+        if value > 100 {
+            Err("out of range")
+        } else {
+            Ok(Self(value as u8))
+        }
+    }
+}
+
+fn main() {
+    match Percent::try_from(15u16) {
+        Ok(Percent(value)) => println!("rate={value}"),
+        Err(message) => println!("{message}"),
+    }
+    match Percent::try_from(150u16) {
+        Ok(Percent(value)) => println!("rate={value}"),
+        Err(message) => println!("{message}"),
+    }
+}
+```
+
+```text
+rate=15
+out of range
+```
+
+피할 것: 호출부가 `if value <= 100`을 기억하리라 믿고 `as u8`만 남기는 것. 문자열 포트 거절은 G.1.2이고, 이메일 형식은 G.2.1입니다. 여기서의 교훈은 실패하는 숫자 변환을 `TryFrom` 하나로 모으는 것입니다. `Result`로 거절을 돌려주는 설명은 [Chapter 12](../chapters/chapter_12.md)에 있습니다.
+
+---
+
 ## References
 
 - [Chapter 4](../chapters/chapter_04.md), [Chapter 20](../chapters/chapter_20.md) — `Drop`과 RAII
@@ -538,3 +989,4 @@ leave outer
 - [Chapter 13](../chapters/chapter_13.md), [Chapter 14](../chapters/chapter_14.md), [Chapter 15](../chapters/chapter_15.md) — 에러, 컬렉션, 이터레이터
 - [Chapter 16](../chapters/chapter_16.md), [Chapter 17](../chapters/chapter_17.md) — 스레드와 공유 상태
 - [Chapter 19](../chapters/chapter_19.md), [Chapter 23](../chapters/chapter_23.md) — 매크로와 테스트
+- [Chapter 7](../chapters/chapter_07.md), [Chapter 12](../chapters/chapter_12.md), [Chapter 14](../chapters/chapter_14.md) — 구조체, `Result`, 문자열과 맵. G.3과 G.4가 가리키는 자리입니다

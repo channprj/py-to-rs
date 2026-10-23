@@ -133,7 +133,7 @@
 * **[부록 D. 실전 크레이트 생태계 지도](./appendices/appendix_d_crates.md)** — 도메인별 라이브러리 대응표
 * **[부록 E. Python → Rust 마이그레이션 플레이북](./appendices/appendix_e_migration.md)** — 핫스팟 이전 전략과 체크리스트
 * **[부록 F. 용어집 (Glossary)](./appendices/appendix_f_glossary.md)** — 핵심 용어의 단일 진실 원천, 최초 등장 챕터 딥링크 + 양방향 색인
-* **[부록 G. 바로 베끼는 예제와 디자인 패턴](./appendices/appendix_g_patterns.md)** — 시나리오 6개와 뉴타입·타입스테이트·빌더·전략·RAII 참조 구현
+* **[부록 G. 바로 베끼는 예제와 디자인 패턴](./appendices/appendix_g_patterns.md)** — 시나리오 12개와 뉴타입·타입스테이트·빌더·전략·RAII·확장 트레이트·커맨드·데코레이터·어댑터·TryFrom 참조 구현
 
 ---
 ## 📝 집필 방식 (Sample)
