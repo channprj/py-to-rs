@@ -1,5 +1,9 @@
 # Python to Rust Complete Guide
 
+<p align="center">
+  <img src="./images/cover.png" alt="Python to Rust 표지 배너" width="100%">
+</p>
+
 > 파이썬 개발자를 위한 러스트 마스터클래스 — 문법 나열이 아니라, **Python 코드와의 1:1 대응 + 내부 메모리 구조·디스패치 관점의 비교**로 Rust를 정복합니다.
 
 10년 차 이상의 Python 백엔드/데이터/인프라 엔지니어를 위해 쓴 책입니다. `asyncio`, `multiprocessing`, `Pydantic`, `numpy`로 성능의 벽에 부딪혀 본 적이 있다면, 이 책은 그 벽 너머의 도구를 손에 쥐여 줍니다. Rust는 단순히 "빠른 언어"가 아니라 **프로그래밍에 대한 멘탈 모델의 전환**을 요구하는 언어이며, 이 책은 그 전환을 Python 개발자의 언어로 안내합니다.
@@ -28,17 +32,23 @@
 
 ### Part 1. 기반 다지기 (Foundations &amp; Tooling)
 
+![Part 1. 기반 다지기](./images/part-01-foundations.jpg)
+
 - [Chapter 1. 왜 Python 개발자가 Rust를 배워야 하는가?](./chapters/chapter_01.md)
 - [Chapter 2. 도구 생태계: 패키징 지옥에서 벗어나기](./chapters/chapter_02.md)
 - [Chapter 3. 문법의 이면: 표현식과 타입 시스템](./chapters/chapter_03.md)
 
 ### Part 2. 핵심 패러다임 전환 (The Paradigm Shift)
 
+![Part 2. 핵심 패러다임 전환](./images/part-02-ownership.jpg)
+
 - [Chapter 4. 소유권(Ownership): GC 없이 살아남기](./chapters/chapter_04.md)
 - [Chapter 5. 참조와 대여(Borrowing &amp; References)](./chapters/chapter_05.md)
 - [Chapter 6. 수명(Lifetimes): 컴파일러에게 의도 설명하기](./chapters/chapter_06.md)
 
 ### Part 3. 데이터 모델링 (Python OOP의 해체)
+
+![Part 3. 데이터 모델링](./images/part-03-modeling.jpg)
 
 - [Chapter 7. Struct와 데이터 모델링 (`dataclass`/`Pydantic` 대체)](./chapters/chapter_07.md)
 - [Chapter 8. 상속의 종말과 컴포지션](./chapters/chapter_08.md)
@@ -48,15 +58,21 @@
 
 ### Part 4. 우아한 실패 (Error Handling)
 
+![Part 4. 우아한 실패](./images/part-04-errors.jpg)
+
 - [Chapter 12. `try-except`는 없다: `Option`과 `Result`](./chapters/chapter_12.md)
 - [Chapter 13. 에러 전파와 커스텀 에러 설계 (`thiserror`/`anyhow`)](./chapters/chapter_13.md)
 
 ### Part 5. 컬렉션과 이터레이터 (Collections &amp; Iteration)
 
+![Part 5. 컬렉션과 이터레이터](./images/part-05-collections.jpg)
+
 - [Chapter 14. 소유권을 가진 스마트 포인터 컬렉션 (`Vec`/`HashMap`/`String`)](./chapters/chapter_14.md)
 - [Chapter 15. 이터레이터와 제너레이터](./chapters/chapter_15.md)
 
 ### Part 6. GIL의 해방과 동시성 (Concurrency &amp; Async)
+
+![Part 6. GIL의 해방과 동시성](./images/part-06-concurrency.jpg)
 
 - [Chapter 16. 멀티스레딩: `threading` 모듈의 한계 돌파](./chapters/chapter_16.md)
 - [Chapter 17. 상태 공유와 동기화 (`Arc`/`Mutex`/`RwLock`)](./chapters/chapter_17.md)
@@ -64,15 +80,21 @@
 
 ### Part 7. 메타프로그래밍과 깊은 곳으로 (Advanced Rust)
 
+![Part 7. 메타프로그래밍](./images/part-07-macros.jpg)
+
 - [Chapter 19. 매크로: 데코레이터/메타클래스의 대체재](./chapters/chapter_19.md)
 - [Chapter 20. 스마트 포인터와 메모리 트릭 (`Box`/`Rc`/`RefCell`)](./chapters/chapter_20.md)
 
 ### Part 8. 궁극의 브릿지 (Python 🤝 Rust)
 
+![Part 8. 궁극의 브릿지](./images/part-08-bridge.jpg)
+
 - [Chapter 21. C FFI와 Unsafe Rust](./chapters/chapter_21.md)
 - [Chapter 22. PyO3: Python과 Rust의 완벽한 결합](./chapters/chapter_22.md)
 
 ### Part 9. 프로덕션으로 가는 길 (From Language to Production)
+
+![Part 9. 프로덕션으로 가는 길](./images/part-09-production.jpg)
 
 - [Chapter 23. 테스트와 문서화: `pytest`를 넘어서](./chapters/chapter_23.md)
 - [Chapter 24. CLI 애플리케이션: `argparse`/`click`에서 `clap`으로](./chapters/chapter_24.md)
@@ -112,6 +134,7 @@ py-to-rs/
 ├── README.md                 # 이 파일 (책 소개 + 전체 내비게이션)
 ├── BOOK_TOC.md               # 상세 목차와 집필 방향
 ├── frontmatter.md            # 서문 · 읽는 법 · 환경 설정
+├── images/                   # 표지 배너와 부별 삽화
 ├── chapters/                 # 본문 26개 챕터 (Part 1~9)
 │   ├── chapter_01.md
 │   ├── ...

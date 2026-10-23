@@ -1,5 +1,8 @@
 # Chapter 12. `try-except`는 없다: `Option`과 `Result`
 
+![Part 4. 우아한 실패](../images/part-04-errors.jpg)
+
+
 새벽에 PagerDuty 알람을 받고 일어나, 스택 트레이스(Stack Trace) 맨 아래에서 `KeyError: 'user_id'` 한 줄을 발견해 본 적 있나요? 그 키가 없을 수 있다는 사실은 어디에도 적혀 있지 않았습니다. 함수 시그니처는 `def enrich(payload: dict) -> dict:`라고 떳떳하게 선언되어 있었고, 호출하는 쪽은 그 약속을 믿었을 뿐입니다. 예외(Exception)는 타입 시스템 바깥에서 조용히 흐르다가, 가장 처리하기 곤란한 운영 환경에서 터집니다.
 
 파이썬 개발자는 에러가 날 만한 곳에 본능적으로 `try-except`를 두릅니다. 딕셔너리 접근(`KeyError`), 파일 열기(`FileNotFoundError`), 네트워크 호출(`ConnectionError`), 정수 변환(`ValueError`) — 모두 예외를 던지고(`raise`) 받습니다(`except`). 이 모델의 매력은 분명합니다. 정상 경로(Happy Path)에 에러 처리 코드가 끼어들지 않아 본문이 깨끗하고, 깊은 콜스택에서 던진 예외가 처리자를 만날 때까지 자동으로 거슬러 올라갑니다. 파이썬다운 EAFP(Easier to Ask Forgiveness than Permission) 스타일은 이 자동 전파 위에 세워진 문화입니다.

@@ -1,5 +1,8 @@
 # Chapter 21. C FFI와 Unsafe Rust
 
+![Part 8. 궁극의 브릿지](../images/part-08-bridge.jpg)
+
+
 `import numpy as np`라고 타이핑할 때, 여러분은 사실 무슨 일이 벌어지는지 알고 있나요? 파이썬 인터프리터는 `numpy/core/_multiarray_umath.so`라는 컴파일된 공유 라이브러리(shared object)를 `dlopen`으로 메모리에 올립니다. 그 안에는 C와 일부 어셈블리(SIMD 커널)로 작성된 함수들이 들어 있습니다. 여러분이 `arr @ other`라고 쓰는 순간 호출되는 것은 파이썬 바이트코드가 아니라 BLAS 라이브러리의 `dgemm` 같은 C 함수입니다. 파이썬 인터프리터는 그저 인자를 포장해서 C 함수에 넘기고, 결과 포인터를 받아 파이썬 객체로 다시 감싸는 **얇은 접착제(glue)** 역할을 합니다.
 
 이것이 파이썬이 느린 언어인데도 데이터 과학과 AI의 표준어가 된 비밀입니다. 파이썬은 빠른 언어가 아닙니다. 파이썬은 **세상에서 가장 다루기 쉬운 C 언어 래퍼(Wrapper)**입니다. `numpy`, `pandas`, `torch`, `tensorflow`, `lxml`, `pydantic-core`, 심지어 `re` 모듈의 정규식 엔진까지, 성능이 중요한 모든 것은 C/C++/Rust로 내려가 있고 파이썬은 그 위에 우아한 API를 씌웁니다.
