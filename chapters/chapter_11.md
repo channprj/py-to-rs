@@ -1,5 +1,7 @@
 # Chapter 11. 믹스인(Mixin) 패턴과 생성(Creational) 패턴
 
+![Chapter 11. 믹스인(Mixin) 패턴과 생성(Creational) 패턴](../images/chapter-11-patterns.jpg)
+
 객체에 기능을 "끼워 넣어 본" 적이 있나요? Django로 뷰(View)를 짜다 보면 어느 순간 클래스 선언부가 이렇게 변합니다. `class OrderUpdateView(LoginRequiredMixin, PermissionRequiredMixin, UpdateModelMixin, GenericAPIView)`. 네 개의 부모 클래스가 한 줄에 늘어서 있고, 각각은 인증·권한·부분 업데이트·기본 라우팅이라는 **횡단 관심사(Cross-cutting Concern)**를 조각조각 들고 있습니다. 우리는 이 조각들을 다중 상속(Multiple Inheritance)으로 조립해 거대한 클래스를 만들어 냅니다. 편리합니다. 그리고 위험합니다.
 
 위험한 이유는 두 가지입니다. 첫째, 저 네 클래스 중 두 개가 같은 이름의 메서드(`get_queryset` 같은)를 가지면, 실제로 어느 것이 호출될지는 파이썬의 **MRO(Method Resolution Order)**라는 C3 선형화 알고리즘이 결정합니다. 상속 순서를 한 칸만 바꿔도 동작이 달라지는데, 그걸 알아내려면 클래스 계층 전체를 머릿속에서 위상 정렬해야 합니다. 둘째, 이 모든 디스패치는 런타임에 `__mro__` 튜플을 따라 사전(`__dict__`)을 순회하며 이뤄집니다. 비싸고, 불투명하고, 정적 분석 도구(mypy)가 완벽히 추적하지 못합니다.

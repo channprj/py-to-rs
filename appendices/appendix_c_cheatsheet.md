@@ -1,5 +1,7 @@
 # 부록 C. Python → Rust 치트시트
 
+![부록 C. Python → Rust 치트시트](../images/appendix-c-cheatsheet.jpg)
+
 이 부록은 본문을 읽으며 체득한 사고 흐름을 **빠르게 찾아보는 레퍼런스**로 압축한 것입니다. 설명은 최소화하고, 왼쪽에 익숙한 Python 관용구, 오른쪽에 그대로 동작하는 Rust 코드를 둡니다. 모든 Rust 코드는 `edition = 2021` 기준이며, 별도 표기가 없으면 표준 라이브러리만으로 컴파일됩니다.
 
 표를 볼 때 두 가지를 기억하세요. 첫째, Python의 한 줄이 Rust에서 한 줄이 아닌 경우는 **거의 항상 소유권(Ownership)·타입(Type)·에러(Error)를 명시적으로 드러내기 때문**입니다. 둘째, Rust의 이터레이터 체인은 `for` 루프와 동일한 어셈블리로 단일형화(Monomorphization)되므로, "함수형 스타일이 느릴까?" 걱정할 필요가 없습니다(Chapter 15).

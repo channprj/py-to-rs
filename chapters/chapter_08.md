@@ -1,5 +1,7 @@
 # Chapter 8. 상속(Inheritance)의 종말과 컴포지션(Composition)
 
+![Chapter 8. 상속(Inheritance)의 종말과 컴포지션(Composition)](../images/chapter-08-composition.jpg)
+
 객체 지향 프로그래밍(OOP)을 10년 이상 해온 파이썬 개발자에게 **상속(Inheritance)**은 코드 재사용을 위한 가장 자연스러운 도구입니다. `BaseModel`, `AbstractUser`, `Mixin` 등 수많은 부모 클래스를 조합하여(다중 상속, MRO) 자식 클래스를 만들어 내는 것은 파이썬 프레임워크(특히 Django)에서 흔히 볼 수 있는 패턴입니다.
 
 Django 모델 하나를 떠올려 봅시다. `class Post(TimestampedModel, SoftDeleteModel, models.Model)`처럼 세 개의 부모를 한 줄에 늘어놓는 순간, 여러분은 사실 거대한 빙산의 일각 위에 서 있는 것입니다. `models.Model`만 해도 메타클래스(`ModelBase`), 디스크립터, `__init_subclass__` 훅, 그리고 수백 개의 상속된 메서드를 끌고 옵니다. `Post` 인스턴스의 `save()`를 호출하면, 파이썬은 런타임에 MRO(Method Resolution Order)라는 선형화된 클래스 목록을 따라 어느 부모의 `save()`를 실행할지 탐색합니다. 잘 동작할 때는 마법 같지만, 부모 클래스 하나의 시그니처가 바뀌는 순간 — 혹은 두 부모가 같은 이름의 메서드를 가지고 있을 때 — 여러분은 "왜 내 코드가 깨졌지?"를 디버깅하며 밤을 새우게 됩니다.

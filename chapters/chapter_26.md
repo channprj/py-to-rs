@@ -1,5 +1,7 @@
 # Chapter 26. 성능 엔지니어링: 프로파일링·criterion·SIMD
 
+![Chapter 26. 성능 엔지니어링: 프로파일링·criterion·SIMD](../images/chapter-26-perf.jpg)
+
 10년 차 Python 엔지니어라면 "성능 튜닝"이라는 단어에 본능적인 경계심이 있을 것입니다. 좋은 의미에서입니다. 우리는 추측에 기반한 최적화가 거의 항상 시간 낭비라는 것을 비싼 대가를 치르며 배웠습니다. 어느 새벽 p99 레이턴시 알람에 깨어 `cProfile`을 붙여 보면, 우리가 한 달 전 "여기가 느릴 거야"라며 정성껏 캐싱을 박아둔 함수는 전체 시간의 1.2%였고, 진짜 범인은 아무도 의심하지 않던 `json.loads`와 그 뒤의 dict 컴프리헨션이었습니다. 측정 없는 최적화는 죄악이라는 격언(Donald Knuth의 "premature optimization is the root of all evil")은 Python 세계에서 특히 뼈아프게 사실입니다.
 
 그래서 우리는 측정 도구를 사랑하게 됐습니다. `cProfile`로 호출 그래프를 뜨고, `py-spy`로 운영 중인 프로세스에 무중단으로 샘플러를 붙이고, `line_profiler`로 한 줄 한 줄의 비용을 재고, `memory_profiler`와 `tracemalloc`으로 메모리 누수를 추적합니다. 이 도구들은 훌륭합니다. 문제는 측정이 끝난 뒤입니다. 병목을 정확히 찾아냈는데, 그 병목이 순수 Python 인터프리터 루프 안에 있다면, 우리가 할 수 있는 일은 제한적입니다. 알고리즘을 바꾸거나, `numpy`로 벡터화하거나, C 확장으로 도망가거나. [Chapter 1](./chapter_01.md)에서 해부한 그 비용 — 매 반복마다 `PyObject`를 할당하고, 타입 슬롯을 조회하고, refcount를 증감하는 — 은 Python 코드를 아무리 영리하게 다시 짜도 사라지지 않습니다. 이것이 **Python 최적화의 천장**입니다.

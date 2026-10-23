@@ -1,5 +1,7 @@
 # Chapter 2. 도구 생태계: 패키징 지옥에서 벗어나기
 
+![Chapter 2. 도구 생태계: 패키징 지옥에서 벗어나기](../images/chapter-02-tooling.jpg)
+
 새 노트북을 받았다고 상상해 봅시다. 10년 차 파이썬 엔지니어인 여러분이 회사의 기존 서비스를 로컬에서 띄우기까지 몇 단계가 필요할까요? 대략 이렇습니다. `pyenv`로 정확한 패치 버전(3.11.4였던가, 3.11.6이었던가?)을 깔고, `pyenv local`로 디렉터리에 고정하고, `python -m venv`로 가상 환경을 만들고, 활성화한 뒤, `poetry install`을 돌립니다. 그런데 `psycopg2` 빌드가 깨집니다. 시스템에 `libpq`가 없거나, `openssl@3` 헤더 경로를 못 찾았거나, Apple Silicon인데 휠(wheel)이 x86_64용만 있었던 겁니다. Confluence 온보딩 문서의 "Troubleshooting" 섹션을 뒤지며 `brew install`을 몇 번 더 하고, 환경 변수를 export하고, 결국 30분에서 길게는 반나절을 비즈니스 로직과 무관한 환경 세팅에 씁니다.
 
 이것이 파이썬의 **패키징 지옥(Packaging Hell)**입니다. 문제의 본질은 파이썬이 나빠서가 아니라, **언어의 책임 범위가 인터프리터 하나에서 끝나기 때문**입니다. 버전 관리(`pyenv`/`asdf`), 환경 격리(`venv`/`virtualenv`/`conda`), 의존성 해석(`pip`/`pipenv`/`poetry`/`pdm`/`uv`), 락 파일(`Pipfile.lock`/`poetry.lock`), 포매팅(`black`/`isort`), 린팅(`flake8`/`pylint`/`ruff`), 타입 체크(`mypy`/`pyright`), 테스트(`pytest`/`tox`/`nox`), 빌드 백엔드(`setuptools`/`hatchling`/`maturin`) — 이 모든 영역을 **서로 다른 단체와 개인이 만든 서드파티 도구**가 채우고 있습니다. 각각은 훌륭하지만, 이들을 하나의 일관된 파이프라인으로 엮는 일은 온전히 여러분의 몫입니다. 그리고 그 조합은 회사마다, 프로젝트마다, 심지어 팀원마다 미묘하게 다릅니다.

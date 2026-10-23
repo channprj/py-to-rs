@@ -1,5 +1,7 @@
 # Chapter 6. 수명 (Lifetimes): 컴파일러에게 의도 설명하기
 
+![Chapter 6. 수명 (Lifetimes): 컴파일러에게 의도 설명하기](../images/chapter-06-lifetimes.jpg)
+
 파이썬에서 다음과 같은 함수를 작성해 본 적 있나요? 입력 리스트의 일부를 잘라서 돌려주는 흔하디흔한 코드입니다.
 
 ```python

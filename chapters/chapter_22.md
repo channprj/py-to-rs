@@ -1,5 +1,7 @@
 # Chapter 22. PyO3: Python과 Rust의 완벽한 결합
 
+![Chapter 22. PyO3: Python과 Rust의 완벽한 결합](../images/chapter-22-pyo3.jpg)
+
 축하합니다. 여기까지 왔습니다. 지난 21개 챕터 동안 우리는 파이썬의 한계(GIL, GC Pause, 덕 타이핑(Duck Typing)의 런타임 오버헤드)와 Rust의 해법(소유권(Ownership), 무비용 추상화(Zero-cost Abstraction), 두려움 없는 동시성(Fearless Concurrency))을 메모리 바이트와 어셈블리 수준까지 파헤쳤습니다. 그리고 바로 앞 Chapter 21에서는 Rust가 C 세계와 통신하는 FFI(Foreign Function Interface)와 `unsafe`의 진짜 의미 — "컴파일러가 검증 못 하니 네가 책임져라" — 를 배웠습니다. 그 챕터의 마지막 문장은 이렇게 끝났습니다. "다음 장에서 파이썬과 Rust가 물리적으로 하나의 `.so` 파일이 되는 과정을 직접 만들어 보겠습니다."
 
 이제 그 결합을 직접 만들어 볼 차례입니다. 하지만 그 전에, 한 가지 오해부터 정정하고 싶습니다. 이 책을 끝까지 읽은 여러분이 다음 주 월요일에 출근해서 "이제부터 우리 서비스를 전부 Rust로 다시 짜겠습니다"라고 선언한다면, 그것은 이 책이 가르치려던 것을 정반대로 이해한 것입니다. 10년 차 엔지니어가 잘 압니다. 비즈니스 로직의 90%는 I/O 대기, DB 쿼리, 외부 API 호출, 인증, 직렬화 같은 "느려도 상관없는" 코드이고, 그 영역에서는 파이썬의 생산성과 생태계(Django, FastAPI, SQLAlchemy, pandas)가 압도적입니다. CPU가 99% 노는 핸들러를 Rust로 다시 짜는 것은 시간 낭비를 넘어 죄악입니다.
