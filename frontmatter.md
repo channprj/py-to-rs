@@ -66,7 +66,7 @@ Rust 입문서는 이미 차고 넘칩니다. 그런데 그 대부분은 암묵�
 - **"데이터 모델/직렬화를 옮기고 싶다"** → 7 → 9 → 10 → 12 → 13
 - **"Rust 도구나 서비스를 출시하고 싶다"** → 2 → 12 → 13 → 23 → 24 → 25 → 26
 
-### 각 장의 3단 구조: Python Way → Rust Mental Model → Under the Hood
+### 각 장의 4단 구조: Python Way → Rust Mental Model → Rust Implementation → Under the Hood
 
 모든 장은 일관된 사고 흐름을 따릅니다. 이 리듬에 익숙해지면 책 전체가 한결 빠르게 읽힙니다.
 
@@ -205,7 +205,7 @@ $ cargo run
 Hello, world!
 ```
 
-`cargo run`은 컴파일과 실행을 한 번에 합니다. `Finished 'dev' profile`이라는 문구에 주목하십시오 — 기본은 **디버그 빌드(최적화 꺼짐)**입니다. 성능을 측정할 때는 반드시 `--release`를 붙여야 합니다(이것이 입문자가 "Rust가 Python보다 느리다"고 착각하는 가장 흔한 함정입니다, [Chapter 1](./chapters/chapter_01.md) 참고).
+`cargo run`은 컴파일과 실행을 한 번에 합니다. ``Finished `dev` profile``이라는 문구에 주목하십시오 — 기본은 **디버그 빌드(최적화 꺼짐)**입니다. 성능을 측정할 때는 반드시 `--release`를 붙여야 합니다(이것이 입문자가 "Rust가 Python보다 느리다"고 착각하는 가장 흔한 함정입니다, [Chapter 1](./chapters/chapter_01.md) 참고).
 
 ```bash
 $ cargo run --release
