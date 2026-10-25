@@ -6,7 +6,7 @@
 
 이제 그 결합을 직접 만들어 볼 차례입니다. 하지만 그 전에, 한 가지 오해부터 정정하고 싶습니다. 이 책을 끝까지 읽은 여러분이 다음 주 월요일에 출근해서 "이제부터 우리 서비스를 전부 Rust로 다시 짜겠습니다"라고 선언한다면, 그것은 이 책이 가르치려던 것을 정반대로 이해한 것입니다. 10년 차 엔지니어가 잘 압니다. 비즈니스 로직의 90%는 I/O 대기, DB 쿼리, 외부 API 호출, 인증, 직렬화 같은 "느려도 상관없는" 코드이고, 그 영역에서는 파이썬의 생산성과 생태계(Django, FastAPI, SQLAlchemy, pandas)가 압도적입니다. CPU가 99% 노는 핸들러를 Rust로 다시 짜는 것은 시간 낭비를 넘어 죄악입니다.
 
-진짜 병목은 항상 좁은 구간에 숨어 있습니다. 수백만 행의 로그를 파싱하는 루프, JSON을 검증하는 핫패스, 토큰을 자르는 전처리, 수치를 집계하는 집합 연산. 프로파일러를 돌리면 전체 시간의 80%가 코드의 5%에서 소모되고 있음을 발견하게 됩니다. 그 5%만 도려내서 Rust로 교체하고, 나머지 95%는 파이썬 그대로 두는 것 — 이것이 이 챕터의 전부이자, 현대 파이썬 고성능 라이브러리들이 모두 채택한 전략입니다. `pydantic-core`(검증), `polars`(데이터프레임), `tokenizers`(HuggingFace 전처리), `ruff`(린터), `cryptography`(암호), `orjson`(JSON) — 이 라이브러리들의 공통점은 단 하나입니다. **파이썬 API를 입은 Rust 엔진**이라는 것.
+진짜 병목은 항상 좁은 구간에 숨어 있습니다. 수백만 행의 로그를 파싱하는 루프, JSON을 검증하는 핫패스, 토큰을 자르는 전처리, 수치를 집계하는 집합 연산. 프로파일러를 돌리면 전체 시간의 80%가 코드의 5%에서 소모되고 있음을 발견하게 됩니다. 그 5%만 도려내서 Rust로 교체하고, 나머지 95%는 파이썬 그대로 두는 것 — 이것이 이 챕터의 전부이자, 현대 파이썬 고성능 라이브러리들이 모두 채택한 전략입니다. `pydantic-core`(검증), `polars`(데이터프레임), `tokenizers`(HuggingFace 전처리), `cryptography`(암호), `orjson`(JSON) — 이 라이브러리들의 공통점은 단 하나입니다. **파이썬 API를 입은 Rust 엔진**이라는 것. `ruff`는 같은 언어로 만든 CLI이고, 프로세스 안에서 `import`하는 확장은 아닙니다.
 
 이번 챕터에서는 그 엔진을 만들어주는 도구 **PyO3**와 빌드 시스템 **maturin**을 다룹니다. 단순히 "함수를 노출하는 법"에 그치지 않고, PyO3가 Chapter 21에서 본 `unsafe` C-API 위에 어떻게 안전한 래퍼를 씌우는지, `py.detach()`가 GIL을 풀었을 때 실제로 멀티코어가 어떻게 돌아가는지, numpy 버퍼를 제로카피(Zero-copy)로 빌려오는 비용이 얼마인지까지 내부로 파고듭니다. 마지막 절에서는 핫스팟만 골라 옮기는 적용 전략을 정리합니다. 그 다음 Chapter 23부터는 테스트, CLI, 웹 서비스, 성능 측정으로 이어집니다.
 
@@ -31,7 +31,7 @@ def aggregate(lines: list[str]) -> dict[int, float]:
     return totals
 ```
 
-이 코드는 명료하고 정확합니다. 문제는 속도입니다. 1,000만 줄을 처리하면 이 루프는 수 초가 걸립니다. 왜일까요? 루프의 매 반복마다 일어나는 일을 메모리 관점에서 분해해 봅시다. `line.split(",")`은 새 리스트와 두 개의 새 `str` 객체를 힙(Heap)에 할당합니다. `int(id_str)`과 `float(value_str)`은 각각 새 `PyObject`를 박싱(boxing)합니다 — 파이썬에서 정수 하나는 28바이트, 부동소수점 하나는 24바이트짜리 힙 객체입니다(Chapter 3에서 본 `PyObject` 헤더의 비용). `totals.get(...)`은 해시를 계산하고, 더하기 연산은 또 새 `float` 객체를 만듭니다. 한 줄당 대여섯 번의 힙 할당과 그만큼의 참조 카운팅(`Py_INCREF`/`Py_DECREF`)이 발생합니다. 게다가 이 모든 것이 GIL 아래에서 단일 코어로만 돕니다. CPU가 8개여도 7개는 놀고 있습니다.
+이 코드는 명료하고 정확합니다. 문제는 속도입니다. 1,000만 줄을 처리하면 이 루프는 수 초가 걸립니다. 왜일까요? 루프의 매 반복마다 일어나는 일을 메모리 관점에서 분해해 봅시다. `line.split(",")`은 새 리스트와 두 개의 새 `str` 객체를 힙(Heap)에 할당합니다. `int(id_str)`과 `float(value_str)`은 `PyObject`로 박싱(boxing)합니다. `float`는 24바이트입니다. 정수는 캐시(`-5~256`) 밖이고 30비트 미만이면 28바이트, 더 크면 32·36바이트입니다(CPython 3.13.6). 캐시 안의 값은 새 객체가 아닙니다(Chapter 3에서 본 `PyObject` 헤더의 비용). `totals.get(...)`은 해시를 계산하고, 더하기 연산은 또 새 `float` 객체를 만듭니다. 한 줄당 대여섯 번의 힙 할당과 그만큼의 참조 카운팅(`Py_INCREF`/`Py_DECREF`)이 발생합니다. 게다가 이 모든 것이 GIL 아래에서 단일 코어로만 돕니다. CPU가 8개여도 7개는 놀고 있습니다.
 
 **2번 길: 직접 C 확장(C Extension)을 쓴다.** Chapter 21에서 맛본 그 길입니다. 다시 떠올려 봅시다.
 
@@ -105,7 +105,7 @@ $ maturin new --bindings pyo3 fast_agg
 $ cd fast_agg
 ```
 
-생성된 `Cargo.toml`은 다음과 같습니다. 핵심은 `crate-type`과 `features`입니다.
+maturin 1.15.0이 만든 파일은 `edition = "2024"`, `pyo3 = "0.29.0"`입니다. `pyproject.toml`은 `maturin>=1.15,<2.0`과 `requires-python = ">=3.8"`입니다. 아래는 그 파일을 이 장에 맞게 고친 모습입니다. 예제 에디션은 2021, PyO3는 0.30, `requires-python`은 `>=3.12`입니다. 3.8은 지원이 끝났습니다. 핵심은 `crate-type`과 `features`입니다.
 
 ```toml
 [package]
@@ -131,7 +131,7 @@ numpy = "0.30"                 # 22.7. pyo3 0.30.1과 함께 rustc 1.99.1, CPyth
 
 ```toml
 [build-system]
-requires = ["maturin>=1.5,<2.0"]
+requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -209,7 +209,8 @@ fn fast_agg(m: &Bound<'_, PyModule>) -> PyResult<()> {
 import fast_agg
 
 lines = ["1,3.5", "2,1.0", "1,0.5"]
-print(fast_agg.aggregate(lines))   # {1: 4.0, 2: 1.0}
+out = fast_agg.aggregate(lines)
+print(out[1], out[2])  # 4.0 1.0. dict 순서는 HashMap 순회라 보장되지 않는다
 ```
 
 여기서 주목할 것이 **자동 타입 변환**입니다. 함수 시그니처에 `Vec<String>`이라고 쓰면, PyO3가 파이썬 `list[str]`를 순회하며 각 요소를 Rust `String`으로 변환해 `Vec`를 채웁니다. 반환 `HashMap<i64, f64>`는 파이썬 `dict`로 변환됩니다. 이 변환은 두 개의 트레이트가 담당합니다.
@@ -629,7 +630,7 @@ PyO3 프로젝트의 `pyproject.toml`은 파이썬 패키징의 진입점입니�
 
 ```toml
 [build-system]
-requires = ["maturin>=1.7,<2"]
+requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [project]
@@ -662,7 +663,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 def aggregate(lines: Sequence[str]) -> dict[int, float]: ...
-def aggregate_parallel(lines: Sequence[str]) -> dict[int, float]: ...
+def aggregate_parallel(data: Sequence[tuple[int, float]]) -> dict[int, float]: ...
 def square_all(values: object) -> object: ...
 ```
 
@@ -759,7 +760,7 @@ PyO3를 실무에 도입할 때의 체크리스트와, 파이썬 엔지니어가
 
 Part 1에서 우리는 왜 파이썬 엔지니어가 Rust를 배우는지(GIL·GC·런타임 오버헤드의 한계), 그리고 `pip`/`poetry`/`venv`의 혼돈을 Cargo 하나로 통합하는 법을 보았습니다. Part 2에서 이 책의 심장인 **소유권(Ownership)·대여(Borrowing)·수명(Lifetime)**으로 GC 없이 사는 법을 배웠고, Part 3에서 파이썬의 풍부한 객체지향(상속·매직 메서드·Pydantic)을 **Struct·Trait·Enum**으로 해체해 재조립했습니다. Part 4에서 `try/except`를 버리고 **Option과 Result**로 실패를 타입에 담았으며, Part 5에서 컬렉션과 무비용 이터레이터를, Part 6에서 GIL을 벗어난 진짜 동시성(**Arc/Mutex**, tokio 비동기)을 익혔습니다. Part 7에서 매크로와 스마트 포인터로 메타프로그래밍의 깊은 곳을 보았고, Part 8에서 C FFI와 `unsafe`를 거쳐 마침내 이번 챕터에서 두 언어를 물리적으로 결합했습니다.
 
-이 모든 것을 관통하는 단 하나의 깨달음이 있습니다. **Rust는 파이썬을 대체하려고 온 언어가 아닙니다.** Rust는 파이썬의 밑단(C/C++)을 가장 안전하고 모던하게 교체하여, **파이썬 생태계를 더 빠르고 강력하게 만드는 최고의 파트너**입니다. `pydantic-core`, `polars`, `tokenizers`, `ruff`가 증명하듯, 미래의 고성능 파이썬은 점점 더 "Rust 엔진에 파이썬 API를 입힌" 형태가 될 것입니다. 그리고 이제 여러분은 그 엔진을 직접 만들 수 있습니다.
+이 모든 것을 관통하는 단 하나의 깨달음이 있습니다. **Rust는 파이썬을 대체하려고 온 언어가 아닙니다.** Rust는 파이썬의 밑단(C/C++)을 가장 안전하고 모던하게 교체하여, **파이썬 생태계를 더 빠르고 강력하게 만드는 최고의 파트너**입니다. `pydantic-core`, `polars`, `tokenizers`가 증명하듯, 미래의 고성능 파이썬은 점점 더 "Rust 엔진에 파이썬 API를 입힌" 형태가 될 것입니다. 그리고 이제 여러분은 그 엔진을 직접 만들 수 있습니다.
 
 하지만 언어와 FFI를 익히는 것만으로 제품은 출시되지 않습니다. 테스트, CLI, 웹 서비스, 성능 튜닝, 문서화, 배포 자동화가 뒤따라야 합니다. 그래서 이 책은 여기서 끝나지 않고 Part 9로 넘어갑니다. 다음 네 장은 "Rust를 안다"에서 "Rust로 프로덕션을 운영한다"로 넘어가는 다리입니다.
 
