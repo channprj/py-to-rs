@@ -62,11 +62,11 @@
 | `requests` | [`reqwest`](https://crates.io/crates/reqwest) | **사실상 표준 HTTP 클라이언트.** 고수준 API, JSON·쿠키·프록시·TLS 내장. 동기(`blocking`)·비동기 모두 지원. (18장) |
 | `http.server`/저수준 | [`hyper`](https://crates.io/crates/hyper) | 저수준 HTTP 구현체. reqwest·axum이 내부적으로 사용. 프레임워크를 직접 만들 때만 직접 다룸. |
 | `FastAPI` | [`axum`](https://crates.io/crates/axum) | **현대 웹 프레임워크 1순위.** tokio·tower 기반, 추출자(extractor) 패턴이 FastAPI의 의존성 주입과 유사. 타입 안전 라우팅. |
-| `Flask`/`Django`(성숙도) | [`actix-web`](https://crates.io/crates/actix-web) | 액터 모델 기반 고성능 프레임워크. 벤치마크 최상위권, 성숙·풍부한 기능. axum과 양대 선택지. |
+| `Flask`/`Django`(성숙도) | [`actix-web`](https://crates.io/crates/actix-web) | 고성능 HTTP 프레임워크. actix-web 4는 액터 크레이트 `actix`와 분리되어 있다. axum과 양대 선택지. |
 | `grpcio`/`grpc` | [`tonic`](https://crates.io/crates/tonic) | gRPC 구현체. `.proto`에서 코드 생성(prost), tokio 기반. 파이썬 gRPC 서비스의 Rust 포팅 표준. |
 | `websockets`/`websocket-client` | [`tokio-tungstenite`](https://crates.io/crates/tokio-tungstenite) | WebSocket. 동기 코어는 [`tungstenite`](https://crates.io/crates/tungstenite), 비동기 래퍼가 tokio-tungstenite. axum에도 WS 지원 내장. |
 
-**선택 기준 요약**: HTTP 클라이언트는 고민 없이 `reqwest`. 웹 서버는 새 프로젝트라면 `axum`(tokio 생태계와 가장 잘 맞고 학습 자료가 풍부), 극한 성능이나 액터 모델 선호 시 `actix-web`. gRPC는 `tonic`, WebSocket은 axum 내장 또는 `tokio-tungstenite`. `hyper`는 프레임워크를 직접 만들 게 아니라면 직접 만질 일이 없습니다.
+**선택 기준 요약**: HTTP 클라이언트는 고민 없이 `reqwest`. 웹 서버는 새 프로젝트라면 `axum`(tokio 생태계와 가장 잘 맞고 학습 자료가 풍부), 처리량이 더 필요하면 `actix-web`. 액터 모델 자체는 `actix` 크레이트다. gRPC는 `tonic`, WebSocket은 axum 내장 또는 `tokio-tungstenite`. `hyper`는 프레임워크를 직접 만들 게 아니라면 직접 만질 일이 없습니다.
 
 > 💡 FastAPI에서 axum으로 넘어올 때 멘탈 모델 매핑: FastAPI의 함수 인자 타입 힌트로 의존성을 주입받던 패턴은 axum의 **추출자(Extractor)**에 대응합니다. `Json<T>`, `Path<T>`, `State<T>`, `Query<T>` 같은 추출자가 핸들러 인자에 선언되면 컴파일 타임에 타입이 검증됩니다. FastAPI가 런타임에 Pydantic으로 검증하던 것을 axum은 컴파일 타임 + serde로 처리합니다.
 
@@ -81,7 +81,7 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 | `multiprocessing.Pool` / `map` | [`rayon`](https://crates.io/crates/rayon) | **데이터 병렬의 결정타.** `.iter()`를 `.par_iter()`로 바꾸면 끝. 작업 훔치기(work-stealing) 스케줄러. GIL 없이 진짜 병렬. (15·16장) |
 | (고급 동시성 프리미티브) | [`crossbeam`](https://crates.io/crates/crossbeam) | std `mpsc`보다 빠른 채널(`crossbeam-channel`), 스코프 스레드, 락프리 자료구조. 저수준 동시성 빌딩 블록. |
 | `threading.Lock` | [`parking_lot`](https://crates.io/crates/parking_lot) | std `Mutex`/`RwLock`의 더 빠르고 작은 대체. 락 중독(poisoning) 없음. 고경합 환경에서 std보다 우월. |
-| 공유 `dict` + 락 | [`dashmap`](https://crates.io/crates/dashmap) | 동시성 HashMap. 샤딩으로 락 경합 최소화. `Arc<Mutex<HashMap>>`를 대체하는 락프리에 가까운 맵. |
+| 공유 `dict` + 락 | [`dashmap`](https://crates.io/crates/dashmap) | 동시성 HashMap. 샤드마다 `RwLock`. `Arc<Mutex<HashMap>>`를 대체합니다. 락프리 맵은 아닙니다. |
 
 **선택 기준 요약**: CPU 바운드 데이터 병렬 처리(이미지 변환, 대량 계산)는 무조건 `rayon`을 먼저 시도하세요 — 한 글자 변경으로 전 코어를 씁니다. 여러 스레드가 같은 맵을 읽고 쓴다면 `Arc<Mutex<HashMap>>` 대신 `dashmap`. 락 성능이 병목이면 std `Mutex`를 `parking_lot::Mutex`로 교체(API 거의 동일). 채널·스코프 스레드 등 정교한 제어가 필요하면 `crossbeam`.
 
@@ -115,9 +115,9 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 | `numpy`(N차원 배열) | [`ndarray`](https://crates.io/crates/ndarray) | N차원 배열·브로드캐스팅·슬라이싱. numpy의 `ndarray`에 가장 가까운 API. BLAS 연동 가능. |
 | `pandas`(데이터프레임) | [`polars`](https://crates.io/crates/polars) | **고성능 데이터프레임.** Apache Arrow 기반, 지연 평가(lazy)·쿼리 최적화. 대용량에서 pandas보다 수 배~수십 배 빠름. 파이썬 바인딩도 인기. |
 | `numpy`(선형대수) | [`nalgebra`](https://crates.io/crates/nalgebra) | 선형대수 특화: 행렬·벡터·쿼터니언·변환. 그래픽스·로보틱스·시뮬레이션. 컴파일 타임 차원 검사 가능. |
-| numpy ↔ Rust 변환 | [`rust-numpy`](https://crates.io/crates/numpy) | PyO3와 함께 파이썬 numpy 배열을 Rust `ndarray`로 무복사(zero-copy) 접근. (22장) |
+| numpy ↔ Rust 변환 | [`numpy`](https://crates.io/crates/numpy) | PyO3와 함께 파이썬 numpy 배열을 본다. Cargo 이름은 `numpy`, 저장소 이름은 rust-numpy. (22장) |
 
-**선택 기준 요약**: 범용 N차원 배열 연산은 `ndarray`, 표 형식 데이터·ETL·분석은 `polars`(pandas 사용자가 가장 만족하는 전환), 선형대수·기하 변환은 `nalgebra`. 파이썬에서 이미 numpy로 돌아가는 코드의 병목만 가속하려면 코드를 다 옮기지 말고 `rust-numpy` + PyO3로 핵심 함수만 Rust로 빼는 것이 비용 대비 효과가 가장 큽니다.
+**선택 기준 요약**: 범용 N차원 배열 연산은 `ndarray`, 표 형식 데이터·ETL·분석은 `polars`(pandas 사용자가 가장 만족하는 전환), 선형대수·기하 변환은 `nalgebra`. 파이썬에서 이미 numpy로 돌아가는 코드의 병목만 가속하려면 코드를 다 옮기지 말고 `numpy` 크레이트 + PyO3로 핵심 함수만 Rust로 빼는 것이 비용 대비 효과가 가장 큽니다.
 
 > 💡 `polars`는 단순히 "빠른 pandas"가 아닙니다. 지연 평가(`LazyFrame`)로 전체 쿼리를 먼저 받아 최적화한 뒤 실행하므로, pandas에서 중간 결과를 매번 메모리에 만들던 낭비가 사라집니다. SQL의 쿼리 플래너가 데이터프레임에 들어왔다고 생각하면 됩니다. 파이썬에서도 `pip install polars`로 쓸 수 있으니, Rust 전환 전 맛보기로 좋습니다.
 
@@ -166,14 +166,14 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 |--------|--------------|------------|
 | `datetime` | [`chrono`](https://crates.io/crates/chrono) | 날짜·시간·타임존(`chrono-tz`)·파싱·포매팅. 가장 널리 쓰이는 시간 크레이트. RFC3339·strftime 호환. |
 | `datetime`(현대적 대안) | [`time`](https://crates.io/crates/time) | 더 작고 안전한 설계의 시간 크레이트. std·일부 생태계가 채택. 기능은 chrono보다 좁지만 의존성이 가벼움. |
-| `random` | [`rand`](https://crates.io/crates/rand) | 난수 생성·분포·셔플. `thread_rng()`가 기본. 암호학적 난수는 `OsRng`. |
+| `random` | [`rand`](https://crates.io/crates/rand) | 난수 생성·분포·셔플. 0.8은 `thread_rng()`, 0.9부터 `rng()`(`thread_rng`는 0.9에서 deprecated). ChaCha12라 `CryptoRng` 계열이고, 파이썬 `random`이 아닙니다. |
 | `hashlib`(sha256 등) | [`sha2`](https://crates.io/crates/sha2) | SHA-256/512. `RustCrypto` 계열의 순수 Rust 구현. 무결성 해시·체크섬. |
 | `hashlib`/`cryptography` | [`ring`](https://crates.io/crates/ring) | 종합 암호 라이브러리(서명·AEAD·해시). BoringSSL 기반, 검증된 구현. TLS·서명 등 실전 암호. |
-| `secrets`(보안 토큰) | [`rand`](https://crates.io/crates/rand) + `OsRng` / [`getrandom`](https://crates.io/crates/getrandom) | OS 엔트로피 기반 보안 난수. 세션 토큰·솔트 생성. 일반 `thread_rng`와 구분해 사용. |
+| `secrets`(보안 토큰) | [`rand`](https://crates.io/crates/rand)의 `OsRng`/`SysRng` / [`getrandom`](https://crates.io/crates/getrandom) | OS 엔트로피 그 자체. 포크 뒤 재시드가 필요하거나 메모리에 생성기 상태를 남기고 싶지 않을 때. |
 
-**선택 기준 요약**: 시간 처리는 기능이 풍부한 `chrono`가 무난하고, 의존성을 최소화하거나 std와 맞물리는 환경이면 `time`. 게임·시뮬레이션 등 일반 난수는 `rand`, 토큰·솔트 같은 **보안용 난수는 반드시 `OsRng`/`getrandom`** 계열(`thread_rng`는 보안용이 아닙니다). 단순 해시는 `sha2`, 서명·암호화·TLS 등 본격 암호는 검증된 `ring`을 쓰고 절대 직접 구현하지 마세요.
+**선택 기준 요약**: 시간 처리는 기능이 풍부한 `chrono`가 무난하고, 의존성을 최소화하거나 std와 맞물리는 환경이면 `time`. 일반 난수는 `rand`의 `rng()`(0.8에서는 `thread_rng()`)입니다. ChaCha12이고 `CryptoRng`(0.10은 `TryCryptoRng`)입니다. 포크 때 자동 재시드가 없고 종료 시 상태를 지우지 않습니다. 그 조건이 위협 모델에 걸리면 `OsRng`/`SysRng`/`getrandom`을 쓰세요. 단순 해시는 `sha2`, 서명·암호화·TLS 등 본격 암호는 검증된 `ring`을 쓰고 절대 직접 구현하지 마세요.
 
-> 🚨 파이썬에서 `random.random()`으로 토큰을 만들면 안 된다는 걸 알았듯이, Rust에서도 `rand::thread_rng()`는 암호학적으로 안전하지 않을 수 있는 빠른 PRNG입니다. 비밀번호 솔트, 세션 토큰, API 키처럼 예측 불가능성이 보안과 직결되는 곳에는 `OsRng`(파이썬 `secrets` 대응)를 명시적으로 쓰세요.
+> 🚨 파이썬 `random.random()`으로 토큰을 만들면 안 됩니다. Rust `ThreadRng`는 그 부류가 아닙니다. ChaCha12이고 `CryptoRng`(0.10은 `TryCryptoRng`)입니다. 다만 포크 후 자동 재시드가 없고, 종료 때 메모리의 생성기 상태를 지우지 않습니다. 그 구멍이 위협 모델에 걸리면 `OsRng`/`SysRng`(파이썬 `secrets`에 더 가깝습니다)를 쓰세요.
 
 ---
 
@@ -203,9 +203,9 @@ GIL 때문에 CPU 병렬 처리에 `multiprocessing`을 써야 했고, I/O 병�
 |------|---------------------|------------|
 | 파이썬에서 Rust 호출 | [`pyo3`](https://crates.io/crates/pyo3) | **사실상 표준.** Rust 함수·구조체를 파이썬 모듈로 노출. GIL 관리·타입 변환·예외 매핑. (22장) |
 | 빌드·패키징 | [`maturin`](https://github.com/PyO3/maturin) | PyO3 확장을 빌드해 wheel로 패키징·배포. `pip install`로 설치 가능한 네이티브 모듈 생성. (22장) |
-| numpy 무복사 연동 | [`rust-numpy`](https://crates.io/crates/numpy) | 파이썬 numpy 배열을 Rust `ndarray`로 zero-copy 접근. 수치 병목 가속의 핵심. (D.6, 22장) |
+| numpy 무복사 연동 | [`numpy`](https://crates.io/crates/numpy) | 파이썬 numpy 배열을 Rust에서 본다. Cargo 이름은 `numpy`, 저장소 이름은 rust-numpy. (D.6, 22장) |
 
-**선택 기준 요약**: 점진적 도입의 정석 — 프로파일러로 파이썬 병목을 찾고(예: pandas 그룹 연산, 무거운 루프), 그 함수만 PyO3 + maturin으로 Rust 확장으로 만들어 `import`합니다. 호출부의 파이썬 코드는 그대로 둡니다. numpy 배열을 주고받으면 `rust-numpy`로 복사 없이 메모리를 공유합니다. 22장의 "pandas 50배 최적화" 예제가 바로 이 패턴입니다.
+**선택 기준 요약**: 점진적 도입의 정석 — 프로파일러로 파이썬 병목을 찾고(예: pandas 그룹 연산, 무거운 루프), 그 함수만 PyO3 + maturin으로 Rust 확장으로 만들어 `import`합니다. 호출부의 파이썬 코드는 그대로 둡니다. numpy 배열을 주고받으면 `numpy` 크레이트로 복사 없이 메모리를 공유합니다. 22장의 센서 로그 집계 예제가 바로 이 패턴입니다. 그 측정표(PyO3 0.22)는 약 35–40배입니다.
 
 > 💡 반대 방향(Rust에서 파이썬 호출)도 같은 `pyo3`로 가능합니다. 예를 들어 Rust 서비스에서 파이썬으로 작성된 ML 모델만 호출하고 싶을 때 `Python::attach`로 인터프리터를 임베드합니다. PyO3 0.30에서 예전 이름은 `Python::with_gil`이었습니다. 다만 GIL이 다시 등장하므로 성능 이점은 제한적입니다. 가능하면 "파이썬이 Rust를 호출"하는 방향을 우선하세요.
 
@@ -378,11 +378,13 @@ fn main() {
 
 Chapter 22와 부록 E의 기본 조합입니다. PyO3 0.30의 `abi3-py312`입니다. 3.8과 3.9는 지원이 끝났고, 0.30에는 `abi3-py38` 피처가 없습니다. 아래 `sum`은 rustc 1.99.1, CPython 3.13.6에서 `cargo check`했습니다.
 
+maturin 1.15.0의 `maturin new`는 `pyo3 = "0.29.0"`을 넣습니다. Chapter 22의 조합은 0.30이므로 버전을 명시해 올립니다.
+
 ```bash
 $ maturin new fast-agg --bindings pyo3
 $ cd fast-agg
 $ cargo add rayon
-$ cargo add pyo3 --features extension-module,abi3-py312
+$ cargo add pyo3@0.30 --features extension-module,abi3-py312
 # numpy 배열을 zero-copy로 받을 때만
 $ cargo add numpy
 ```
@@ -394,7 +396,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.30", features = ["extension-module", "abi3-py312"] }
-rayon = "1"
+rayon = "1.12"
 ```
 
 ```rust

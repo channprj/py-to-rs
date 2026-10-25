@@ -24,7 +24,7 @@
 | `"""docstring"""` | `/// 문서 주석` (항목 위), `//! ` (모듈 내부) |
 | `print("hi")` | `println!("hi");` |
 | `print(x, y)` | `println!("{x} {y}");` (인라인 캡처) |
-| `print(f"{x=}")` | `println!("{x:?}");` 또는 `dbg!(x);` |
+| `print(f"{x=}")` | `dbg!(x);` (`{x:?}`는 값만. rustc 1.99.1은 `{x=}`를 거부) |
 | `print(x, end="")` | `print!("{x}");` (개행 없음) |
 | `import sys; sys.stderr.write(...)` | `eprintln!("error: {msg}");` |
 
@@ -76,7 +76,7 @@ fn main() {
 | `return a + b` | `a + b` (마지막 표현식, 세미콜론 없음) |
 | `def f(): pass` (None 반환) | `fn f() {}` (유닛 `()` 반환) |
 | `f = lambda x: x + 1` | `let f = \|x\| x + 1;` |
-| `sorted(xs, key=lambda p: p[1])` | `xs.sort_by_key(\|p\| p.1);` |
+| `sorted(xs, key=lambda p: p[1])` | `{ let mut s = xs.clone(); s.sort_by_key(\|p\| p.1); s }` |
 | 클로저가 외부 변수 캡처 | `\|x\| x + base` (자동 캡처), `move \|x\| x + base` (소유권 이동) |
 | `*args, **kwargs` | 직접 대응 없음 → 슬라이스 `&[T]`, 빌더, 또는 매크로 |
 | 기본 인자 `def f(x=10):` | 직접 대응 없음 → `Option<T>` 또는 빌더 패턴(Chapter 11) |
@@ -118,7 +118,7 @@ Python의 함수는 일급 객체인 단일 타입(`function`)이지만, Rust의
 | `s += "more"` | `s.push_str("more");` |
 | `s += c` (한 글자) | `s.push('c');` |
 
-Python `str`은 불변(Immutable)이라 `+=`마다 새 객체를 만들지만, Rust `String`은 **가변 힙 버퍼**라 `push_str`이 제자리(in-place)에서 자랍니다. 루프 안 문자열 누적은 Rust가 구조적으로 유리합니다. 파이썬에서 `s += x`를 만 번 반복하면 매번 새 문자열을 할당·복사해 O(n²)에 가까워지지만(그래서 우리는 `"".join(parts)` 관용구를 외워 둡니다), Rust의 `push_str`은 용량(capacity)이 부족할 때만 재할당하는 분할 상환 O(1)이라 루프 누적을 안심하고 씁니다.
+Python `str`은 불변(Immutable)입니다. CPython 3.13.6은 참조가 하나인 문자열을 `+=`할 때 버퍼를 제자리에서 늘려, 그 루프는 선형에 가깝습니다. 문자열이 공유되어 있으면 통째로 복사하므로 `"".join(parts)`가 여전히 분명한 관용구입니다. Rust `String`은 **가변 힙 버퍼**라 `push_str`이 용량(capacity)이 부족할 때만 재할당하는 분할 상환 O(1)입니다.
 
 `&str`과 `String`의 구분도 처음엔 낯설지만 규칙은 단순합니다. `&str`은 **빌린 문자열 조각**(문자열 리터럴, 슬라이스)이고 `String`은 **소유한 힙 버퍼**입니다. 함수 인자는 가능한 한 `&str`로 받아 `String`이든 리터럴이든 모두 받아들이고, 반환하거나 저장할 때는 `String`을 씁니다. 파이썬의 `str` 하나가 두 역할을 겸하던 것을 Rust는 "누가 소유하는가"로 갈라 둔 셈입니다(Chapter 14).
 
@@ -168,7 +168,7 @@ fn main() {
 }
 ```
 
-> **핵심 💡** Rust의 `str`은 **UTF-8 바이트 시퀀스**입니다. `s[i]`가 O(1)이려면 글자가 고정 너비여야 하는데 UTF-8은 그렇지 않으므로, Rust는 아예 정수 인덱싱을 금지합니다. 글자 단위는 `chars()`(O(n) 순회), 바이트 단위는 `as_bytes()`로 명시적으로 선택하게 만듭니다. Python의 `s[i]`가 조용히 O(1)인 척하는 것(실제로는 내부 표현에 따라 다름)과 대조됩니다.
+> **핵심 💡** Rust의 `str`은 **UTF-8 바이트 시퀀스**입니다. `s[i]`가 O(1)이려면 글자가 고정 너비여야 하는데 UTF-8은 그렇지 않으므로, Rust는 아예 정수 인덱싱을 금지합니다. 글자 단위는 `chars()`(O(n) 순회), 바이트 단위는 `as_bytes()`로 명시적으로 선택하게 만듭니다. CPython 3의 `s[i]`는 PEP 393 이후 실제로 O(1)입니다. 글자 너비가 한 문자열 안에서 균일하기 때문입니다. Rust가 정수 인덱싱을 막는 이유는 UTF-8이 가변 폭이기 때문입니다.
 
 ---
 
@@ -217,7 +217,7 @@ fn main() {
 | `xs.extend(ys)` | `xs.extend(ys);` |
 | `xs.insert(i, x)` | `xs.insert(i, x);` |
 | `xs.pop()` | `xs.pop()` (`Option<T>` 반환) |
-| `xs.remove(x)`(값) | `xs.retain(\|&v\| v != x);` 또는 위치 찾아 `remove` |
+| `xs.remove(x)`(값, 첫 항목만) | `position`으로 찾은 인덱스에 `remove`. `retain`은 같은 값을 전부 지움 |
 | `del xs[i]` | `xs.remove(i);` |
 | `len(xs)` | `xs.len()` |
 | `x in xs` | `xs.contains(&x)` |
@@ -226,7 +226,7 @@ fn main() {
 | `sorted(xs)` | `{ let mut s = xs.clone(); s.sort(); s }` |
 | `xs.sort()` (제자리) | `xs.sort();` |
 | `xs.sort(reverse=True)` | `xs.sort_by(\|a, b\| b.cmp(a));` |
-| `sorted(xs, key=f)` | `xs.sort_by_key(\|x\| f(x));` |
+| `sorted(xs, key=f)` | `{ let mut s = xs.clone(); s.sort_by_key(f); s }` |
 | `xs.reverse()` | `xs.reverse();` |
 | `list(reversed(xs))` | `xs.iter().rev().collect::<Vec<_>>()` |
 | `sum(xs)` | `xs.iter().sum::<i64>()` |
@@ -249,7 +249,7 @@ fn main() {
 | `{x for x in xs}` | `xs.iter().copied().collect::<HashSet<_>>()` |
 | `(x*x for x in xs)` (제너레이터) | `xs.iter().map(\|x\| x * x)` (지연 평가, collect 안 함) |
 | `sum(x*x for x in xs)` | `xs.iter().map(\|x\| x * x).sum::<i64>()` |
-| 중첩 `[y for x in xss for y in x]` | `xss.iter().flatten().collect::<Vec<_>>()` |
+| 중첩 `[y for x in xss for y in x]` | `xss.iter().flatten().copied().collect::<Vec<_>>()` (`Copy`. 아니면 `cloned`) |
 | `[[..] for ..]` 펼치기 | `.flat_map(\|x\| ...)` |
 
 ```rust
@@ -280,7 +280,7 @@ fn main() {
 |---|---|
 | `d[k]` | `d[&k]` (없으면 panic) 또는 `d.get(&k)` (`Option`) |
 | `d.get(k)` | `d.get(&k)` → `Option<&V>` |
-| `d.get(k, default)` | `d.get(&k).copied().unwrap_or(default)` |
+| `d.get(k, default)` | `d.get(&k).cloned().unwrap_or(default)` (`Clone`. 아니면 참조를 유지) |
 | `d[k] = v` | `d.insert(k, v);` |
 | `k in d` | `d.contains_key(&k)` |
 | `del d[k]` | `d.remove(&k);` |
@@ -307,7 +307,7 @@ fn main() {
     for (k, v) in data {
         groups.entry(k).or_default().push(v);
     }
-    println!("{groups:?}"); // {"a": [1, 3], "b": [2]}
+    println!("a={:?} b={:?}", groups["a"], groups["b"]); // a=[1, 3] b=[2]
 }
 ```
 
@@ -472,8 +472,8 @@ fn main() {
 | `filter(p, xs)` | `xs.iter().filter(\|x\| p(x))` |
 | `functools.reduce(f, xs, init)` | `xs.iter().fold(init, f)` |
 | `functools.reduce(f, xs)` | `xs.iter().copied().reduce(f)` (`Option`) |
-| `sorted(xs, key=f)` | `xs.sort_by_key(\|x\| f(x))` |
-| `sorted(xs, key=f, reverse=True)` | `xs.sort_by_key(...); xs.reverse();` 또는 `sort_by` |
+| `sorted(xs, key=f)` | `{ let mut s = xs.clone(); s.sort_by_key(f); s }` |
+| `sorted(xs, key=f, reverse=True)` | 복제 후 `sort_by`로 비교를 뒤집음. 제자리 `reverse`는 원본을 바꿈 |
 | `itertools.chain(a, b)` | `a.iter().chain(b.iter())` |
 | `itertools.zip_longest` | `itertools::zip_longest` (itertools 크레이트) |
 | `itertools.groupby` | itertools 0.15 `chunk_by` / `[T]::chunk_by` (`group_by` 없음, 인접만, 정렬 후) |
@@ -509,7 +509,7 @@ fn main() {
 
 ## C.11 자주 쓰는 실전 패턴
 
-데이터 처리 코드에서 거의 매번 등장하는 네 가지 관용구입니다. 파이썬에서는 `collections`가 한 줄로 처리해 주던 것들인데, Rust에서는 `HashMap`의 `entry` API와 이터레이터 조합으로 똑같이 간결하게, 그러나 할당 없이 풀어냅니다.
+데이터 처리 코드에서 거의 매번 등장하는 네 가지 관용구입니다. 파이썬에서는 `collections`가 한 줄로 처리해 주던 것들인데, Rust에서는 `HashMap`의 `entry` API와 이터레이터로 똑같이 간결하게 풉니다. `entry`는 조회를 한 번으로 줄일 뿐, 맵과 `Vec`은 힙에 만듭니다.
 
 ### 카운터 (Counter → HashMap entry)
 
@@ -585,7 +585,7 @@ fn main() {
     for (key, val) in items {
         groups.entry(key).or_default().push(val);
     }
-    println!("{groups:?}"); // {1: ["a", "c"], 2: ["b", "d"]}
+    println!("1={:?} 2={:?}", groups[&1], groups[&2]); // 1=["a", "c"] 2=["b", "d"]
 }
 ```
 
@@ -644,7 +644,7 @@ fn main() {
 | `typing` | 타입 시스템 내장 | `Option`, 제네릭 |
 | `collections.Counter` | `HashMap` + `entry` | C.11 참고 |
 | `itertools` | `std::iter` + `itertools` 크레이트 | |
-| `functools.lru_cache` | `once_cell` / `memoize` 크레이트 | |
+| `functools.lru_cache` | `cached`·`memoize` 크레이트 | `LazyLock`은 인자 없는 1회 초기화 |
 | `asyncio` | `tokio` / `async-std` | Chapter 18 |
 | `multiprocessing` | `std::thread` / `rayon` | 진짜 병렬, GIL 없음 (Chapter 16) |
 | `csv` | `csv` | serde 연동 |

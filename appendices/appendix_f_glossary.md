@@ -266,7 +266,7 @@ GIL 없는 진짜 병렬, 그리고 그것을 안전하게 만드는 타입 시�
 >
 > 해법은 스레드 안전 버전인 `Arc`(Atomic Reference Counted)를 쓰는 것입니다. 컴파일러가 "이 타입은 스레드를 넘으면 안 된다"를 `Send` 트레이트로 알고 차단했습니다 — Python이었다면 운영 환경에서 가끔 카운트가 꼬이는 하이젠버그가 됐을 버그입니다.
 
-**Arc (Atomic Reference Counted)** — 스레드 간 안전하게 공유 소유권을 갖는 스마트 포인터. 참조 카운트를 원자적으로 증감한다. 가변 공유는 `Arc<Mutex<T>>`처럼 락과 조합해야 한다. 최초 상세 등장 [Chapter 17](../chapters/chapter_17.md). · *Python 멘탈모델 대비*: Python은 *모든* 객체가 항상 refcount를 달지만(28바이트 중 8바이트), `Arc`는 진짜 공유가 필요할 때만 선택적으로 씁니다. 99%의 값은 단일 소유라 카운트 자체가 없습니다([Chapter 1](../chapters/chapter_01.md)).
+**Arc (Atomic Reference Counted)** — 스레드 간 안전하게 공유 소유권을 갖는 스마트 포인터. 참조 카운트를 원자적으로 증감한다. 가변 공유는 `Arc<Mutex<T>>`처럼 락과 조합해야 한다. 최초 상세 등장 [Chapter 17](../chapters/chapter_17.md). · *Python 멘탈모델 대비*: Python은 *모든* 객체가 헤더에 8바이트 refcount를 답니다. 객체 전체는 28바이트가 아닙니다. 빈 `str`은 41, `float`는 24, 정수는 크기에 따라 28·32·36입니다(CPython 3.13.6). `Arc`는 진짜 공유가 필요할 때만 선택적으로 씁니다. 99%의 값은 단일 소유라 카운트 자체가 없습니다([Chapter 1](../chapters/chapter_01.md)).
 
 **Mutex/RwLock** — 공유 데이터에 한 번에 하나의 스레드만(또는 RwLock은 여러 reader 혹은 한 writer만) 접근하도록 강제하는 상호 배제 락. Rust에서는 락이 데이터를 **감싸므로** 락 없이 데이터에 접근하는 것 자체가 불가능하다. 최초 상세 등장 [Chapter 17](../chapters/chapter_17.md). · *Python 멘탈모델 대비*: Python의 `threading.Lock`은 락과 데이터가 분리되어 있어 락을 깜빡 잊고 접근해도 막지 않습니다. Rust의 `Mutex<T>`는 데이터를 락 안에 넣어, `lock()`을 거치지 않으면 데이터에 손댈 수 없습니다.
 
