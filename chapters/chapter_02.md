@@ -65,7 +65,7 @@ Rust는 2015년 1.0 출시 시점부터 `cargo`를 함께 내놓았습니다. �
 
 ## 2.3 툴체인 관리: `pyenv`에서 `rustup`으로
 
-파이썬 개발자는 프로젝트마다 다른 인터프리터 버전(3.8, 3.11, 3.12) 때문에 `pyenv`로 버전을 스위칭합니다. Rust도 버전 관리가 필요하지만, `rustup`이 이를 단일 도구로 흡수했고, 한 걸음 더 나아가 **채널(Channel)**과 **컴포넌트(Component)**라는 개념을 추가했습니다.
+파이썬 개발자는 프로젝트마다 다른 인터프리터 버전(3.12, 3.14, 3.15) 때문에 `pyenv`로 버전을 스위칭합니다. Rust도 버전 관리가 필요하지만, `rustup`이 이를 단일 도구로 흡수했고, 한 걸음 더 나아가 **채널(Channel)**과 **컴포넌트(Component)**라는 개념을 추가했습니다.
 
 ```bash
 # The Python Way (pyenv)
@@ -972,7 +972,7 @@ Rustlings 스타일로, 손으로 직접 풀어 보세요. 각 문항 아래 '�
 
 > **정답 스케치:** `serde`는 라이브러리(바이너리 없음)라 `cargo install`이 거부합니다. 에러 메시지: `there is nothing to install in \`serde v1.0.229\`, because it has no binaries` / `cargo install is only for installing programs, and can't be used with libraries.` 올바른 명령은 `cargo add serde --features derive`입니다. 대응: `cargo install`은 전역 CLI 도구 설치이므로 파이썬의 `pipx install`에, `cargo add`는 프로젝트 의존성 추가이므로 `poetry add`/`pip install`(프로젝트 맥락)에 해당합니다.
 
-**문제 4 — nightly 기능과 컴파일러 에러.** stable 1.99.1에서 아래 코드를 컴파일하면 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
+**문제 4 — nightly 기능과 컴파일러 에러.** stable 1.99.1에서 아래 코드는 컴파일되지 않습니다. 어떤 에러 코드가 나오나요? 두 가지 해결책을 제시하세요.
 
 ```rust
 fn main() {
