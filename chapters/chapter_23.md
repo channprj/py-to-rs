@@ -79,7 +79,7 @@ Rust의 출발점은 한 문장으로 요약됩니다. **테스트와 문서는 
 
 둘째, **문서의 코드는 실행되는 테스트다.** `///` 문서 주석 안의 코드 블록은 `cargo test`가 별도의 작은 프로그램으로 컴파일·실행합니다(doctest). 문서가 `Cents::new(150)`을 보여주는데 실제 시그니처가 바뀌었다면, 테스트가 컴파일 에러로 터집니다. Python `doctest`의 강화판이되, **기본으로 켜져 있고** Rust 타입 시스템의 검사를 그대로 받습니다.
 
-셋째, **검증의 모든 단계가 한 명령어로 통합된다.** `cargo test` 한 줄이 단위 테스트, 통합 테스트, doctest를 각각 컴파일해 병렬로 실행합니다. `pytest` + `pytest-cov` + `--doctest-modules` + `conftest.py` 조합이 `cargo test` 하나로 수렴합니다.
+셋째, **검증의 모든 단계가 한 명령어로 통합된다.** `cargo test` 한 줄이 단위 테스트, 통합 테스트, doctest를 각각 컴파일합니다. 하니스끼리는 차례로 실행하고, 한 바이너리 안의 `#[test]`만 기본적으로 병렬입니다(23.5). `pytest` + `pytest-cov` + `--doctest-modules` + `conftest.py` 조합이 `cargo test` 하나로 수렴합니다.
 
 이 세 가지를 Python과 한 표로 정리하면 다음과 같습니다.
 
@@ -251,7 +251,7 @@ fn refund_exceeding_capture_is_rejected() {
 
 > **💡 Under the Hood — 단위 vs 통합의 경계는 "컴파일 단위"의 경계다**
 >
-> 둘의 차이는 철학이 아니라 *물리적 컴파일 단위*입니다. 단위 테스트(`#[cfg(test)] mod tests`)는 라이브러리 크레이트 *안에서* 함께 컴파일되므로 private에 접근합니다. 통합 테스트(`tests/*.rs`)는 라이브러리를 빌드한 *뒤*, 그 산출물을 링크하는 *별개의 크레이트*로 컴파일됩니다. 그래서 통합 테스트는 라이브러리의 공개 ABI 경계 밖에 서 있고, `pub`만 봅니다.
+> 둘의 차이는 철학이 아니라 *물리적 컴파일 단위*입니다. 단위 테스트(`#[cfg(test)] mod tests`)는 라이브러리 크레이트 *안에서* 함께 컴파일되므로 private에 접근합니다. 통합 테스트(`tests/*.rs`)는 라이브러리를 빌드한 *뒤*, 그 산출물을 링크하는 *별개의 크레이트*로 컴파일됩니다. 그래서 통합 테스트는 라이브러리의 공개 API 경계 밖에 서 있고, `pub`만 봅니다.
 >
 > 실무 함의가 두 가지입니다. 첫째, `tests/` 안의 파일이 여러 개면 각각이 별도 크레이트라 **별도 바이너리로 컴파일**됩니다 — 파일이 많으면 그만큼 컴파일·링크가 늘어납니다. 둘째, 통합 테스트끼리 헬퍼를 공유하려면 `tests/common/mod.rs`처럼 서브모듈로 둬야 합니다(`tests/common.rs`로 두면 그 자체가 테스트 크레이트로 잡혀 "테스트 0개"라는 빈 결과를 냅니다). 이 사소해 보이는 규칙이 Rust 입문자가 가장 자주 밟는 디렉터리 함정입니다.
 
@@ -261,17 +261,17 @@ fn refund_exceeding_capture_is_rejected() {
 
 ## 23.5 Under the Hood — `cargo test`는 무엇을 컴파일하는가
 
-`cargo test` 한 줄을 치면 무슨 일이 벌어질까요? 출력의 머리글을 자세히 보면 답이 보입니다. 앞서 만든 라이브러리에 통합 테스트와 doctest까지 더하고 `cargo test`를 돌리면, 출력이 이렇게 *구획*으로 나뉩니다(실제 출력을 요약).
+`cargo test` 한 줄을 치면 무슨 일이 벌어질까요? 출력의 머리글을 자세히 보면 답이 보입니다. 23.3의 단위 테스트 4개, 23.4의 통합 테스트 2개, 23.6의 doctest 3개를 함께 돌리면 구획이 이렇게 나뉩니다. 아래 해시 경로는 cargo가 찍는 형태의 예이고, 개수는 그 세 샘플을 센 값입니다.
 
 ```text
      Running unittests src/lib.rs (target/debug/deps/ch23-9af3043721de81df)
-test result: ok. 8 passed; 0 failed; ...
+test result: ok. 4 passed; 0 failed; ...
 
      Running tests/integration.rs (target/debug/deps/integration-b1f7c80db00ab99d)
 test result: ok. 2 passed; 0 failed; ...
 
    Doc-tests ch23
-test result: ok. 6 passed; 0 failed; ...
+test result: ok. 3 passed; 0 failed; ...
 ```
 
 세 개의 독립된 `Running`/`Doc-tests` 블록이 보이시나요? 이것이 핵심입니다.
@@ -282,7 +282,7 @@ test result: ok. 6 passed; 0 failed; ...
 >
 > 1. **단위 테스트 바이너리.** 라이브러리(`src/lib.rs`)를 `#[cfg(test)]` 코드까지 포함해 컴파일한 **하나의** 실행 파일(`target/debug/deps/ch23-<해시>`). 내부의 `#[test]` 함수들을 수집해 돌립니다.
 > 2. **통합 테스트 바이너리들.** `tests/` 아래의 각 `.rs` 파일마다 **별개의** 실행 파일. 파일이 N개면 바이너리도 N개입니다(23.4의 컴파일 단위 경계).
-> 3. **doctest 실행기.** 각 `///` 코드 블록을 *임시* 작은 프로그램으로 추출·컴파일해 실행합니다. 최신 툴체인은 이들을 하나로 묶어 컴파일하지만(merged doctests), 의미상 각 예제는 독립 프로그램입니다.
+> 3. **doctest 실행기.** 각 `///` 코드 블록을 추출해 컴파일·실행합니다. rustc 1.99.1에서 2024 에디션은 호환되는 doctest를 한 바이너리로 묶어 컴파일하고(`merged doctests compilation`), 2021 에디션은 그 줄을 찍지 않고 예제마다 따로 컴파일합니다. 이 책의 예제 에디션은 2021입니다. 통과 목록은 어느 쪽이든 예제마다 한 줄입니다.
 >
 > 그리고 각 바이너리 안에서 `#[test]` 함수들은 **기본적으로 여러 스레드에 나뉘어 병렬 실행**됩니다. `pytest`가 기본 단일 프로세스이고 병렬화하려면 `pytest-xdist`가 필요한 것과 대조적입니다. 이 병렬성 때문에 테스트는 서로 독립적이어야 하며, 전역 상태(환경 변수, 같은 파일 경로, 공유 DB)를 만지는 테스트는 서로를 오염시킬 수 있습니다.
 
@@ -756,18 +756,18 @@ Refunded {
 
 ### 다섯 렌즈를 한 명령으로
 
-이 모든 테스트 — 단위 8개, 통합 2개, 파라미터화 7개, 속성 4개, 스냅샷 1개, doctest 6개 — 를 `cargo test` 한 줄이 컴파일하고 실행합니다. 실제 측정한 최종 집계입니다.
+이 장에 나온 테스트를 더하면 단위 7개(23.3의 4개와 이 절의 3개), 통합 2개, 파라미터화 7개, 속성 4개, 스냅샷 1개, doctest 3개입니다. 23.3의 `#[should_panic]` 예시는 이 합계에 넣지 않았습니다. `cargo test` 한 줄이 이 종류를 모두 컴파일하고 실행합니다. 아래 숫자는 그 샘플을 센 값입니다.
 
 ```text
-unittests src/lib.rs:    8 passed
+unittests src/lib.rs:    7 passed
 tests/integration.rs:    2 passed
 tests/parametrized.rs:   7 passed
 tests/properties.rs:     4 passed
 tests/snapshot.rs:       1 passed
-Doc-tests ch23:          6 passed
+Doc-tests ch23:          3 passed
 ```
 
-총 28개. `pytest` + `pytest-xdist` + `hypothesis` + `syrupy` + `--doctest-modules`를 따로 설정해 엮었어야 할 일을, 하나의 도구 체인이 통합합니다.
+총 24개. `pytest` + `pytest-xdist` + `hypothesis` + `syrupy` + `--doctest-modules`를 따로 설정해 엮었어야 할 일을, 하나의 도구 체인이 통합합니다.
 
 ---
 
@@ -782,7 +782,7 @@ Doc-tests ch23:          6 passed
 - **공개 API에는 doctest를 달아라.** 문서이자 회귀 테스트입니다. `cargo doc`으로 그대로 HTML이 되고, 거짓말하면 빌드가 막습니다.
 - **불변식이 있는 코드(파서·직렬화·수치·상태 기계)에는 `proptest`를.** "왕복(roundtrip)", "교환법칙", "절대 패닉하지 않음" 같은 속성을 선언하면 경계 버그를 기계가 찾습니다.
 - **느린 테스트는 `#[ignore]`로 분리**하고 CI의 별도 잡(`-- --ignored`)에서 돌립니다.
-- **CI에 `cargo test`(doctest 포함)와 커버리지(`cargo llvm-cov`)를 넣어라.** `-D warnings`로 경고를 에러 승격하면 doctest 누락도 막을 수 있습니다.
+- **CI에 `cargo test`(doctest 포함)와 커버리지(`cargo llvm-cov`)를 넣어라.** 깨진 doctest는 `cargo test`가 잡습니다. `-D warnings`는 기본 경고만 에러로 올립니다. 문서 없는 공개 항목은 기본 경고가 아니므로 `missing_docs`를 따로 켜야 합니다.
 - **큰 구조 출력은 `insta` 스냅샷으로.** 기대값을 손으로 쓰지 말고 리뷰로 승인하세요.
 
 **이건 피하라(안티패턴)**
@@ -887,7 +887,7 @@ Python의 "private 테스트하려면 공개" 습관이 남아, Rust에서도 �
 
 지금까지 Part 9 "프로덕션으로 가는 길"의 첫 조각을 맞췄습니다. 우리는 테스트가 `tests/` 디렉터리에 유배되는 대신 구현 옆에서 private까지 검증하고(`#[cfg(test)]`), 문서의 예제가 거짓말하지 못하도록 컴파일러가 실행하며(doctest), 우리가 떠올리지 못한 반례를 기계가 찾아 최소값까지 축소하는(`proptest`) 세계를 보았습니다. `pytest` 생태계가 여러 도구의 조합으로 풀던 일을, Rust는 `cargo test` 하나와 소수의 잘 설계된 크레이트(`rstest`/`insta`/`proptest`)로 통합합니다.
 
-핵심은 도구의 개수가 아니라 **신뢰의 출처**입니다. 파이썬에서 "초록불"은 "우리가 작성한 케이스가 통과했다"는 뜻이었지만, Rust에서 `cargo test`의 초록불은 "구현·통합·문서·속성이 *전부* 이 순간 일관되다"는 더 강한 명제입니다. 검증된 코드는 신뢰할 수 있는 소프트웨어의 절반입니다. 나머지 절반 — 그 코드를 어떻게 빌드·배포하고, 어떻게 다른 언어와 안전하게 연결하며, 어떻게 운영 환경에서 관찰하는가 — 가 Part 9의 다음 장들을 기다리고 있습니다.
+핵심은 도구의 개수가 아니라 **신뢰의 출처**입니다. 파이썬에서 "초록불"은 "우리가 작성한 케이스가 통과했다"는 뜻이었지만, Rust에서 `cargo test`의 초록불은 "구현·통합·문서·속성이 *전부* 이 순간 일관되다"는 더 강한 명제입니다. 검증된 코드는 신뢰할 수 있는 소프트웨어의 절반입니다. 나머지 절반, 즉 그 코드를 CLI로 포장하고 HTTP 서비스로 올린 뒤 성능을 측정하는 일이 Part 9의 다음 장들(Chapter 24–26)을 기다리고 있습니다.
 
 ---
 
